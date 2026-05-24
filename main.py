@@ -12,6 +12,7 @@ import os
 import sys
 
 import discord
+from aiohttp import web
 from discord.ext import commands
 
 from config import BotConfig, COLOR_PRIMARY, EMBED_FOOTER
@@ -104,12 +105,34 @@ def _setup_logging() -> None:
     logging.getLogger("discord.http").setLevel(logging.WARNING)
 
 
+async def _health(_request: web.Request) -> web.Response:
+    return web.Response(text="OK")
+
+
+async def _start_health_server() -> None:
+    """Start a lightweight HTTP server so Render detects an open port."""
+    port = int(os.getenv("PORT", "0"))
+    if not port:
+        return
+    app = web.Application()
+    app.router.add_get("/", _health)
+    app.router.add_get("/health", _health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    log.info("Health-check server listening on port %d", port)
+
+
 async def main() -> None:
     _setup_logging()
     cfg = BotConfig()
     if not cfg.token:
         log.critical("DISCORD_TOKEN not set. Create a .env file — see .env.example")
         sys.exit(1)
+
+    await _start_health_server()
+
     bot = ExeGuard(cfg)
     async with bot:
         await bot.start(cfg.token)
