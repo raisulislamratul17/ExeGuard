@@ -7,6 +7,7 @@ offending messages/webhooks and times out abusive users.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import timedelta
 
@@ -17,12 +18,38 @@ from discord.ext import commands
 from config import SPAM_MENTION_LIMIT, SPAM_TIMEOUT_DURATION
 from utils.embed_builder import EmbedBuilder
 
+log = logging.getLogger("exeguard.automod")
+
 INVITE_RE = re.compile(
     r"(?:https?://)?(?:www\.)?"
     r"(?:discord\.gg|discord(?:app)?\.com/invite)"
     r"/[A-Za-z0-9\-]+",
     re.IGNORECASE,
 )
+
+
+def _collect_text(message: discord.Message) -> str:
+    """Return all searchable text from a message (content + embeds)."""
+    parts = [message.content]
+    for embed in message.embeds:
+        if embed.description:
+            parts.append(embed.description)
+        if embed.title:
+            parts.append(embed.title)
+        if embed.url:
+            parts.append(embed.url)
+        if embed.footer and embed.footer.text:
+            parts.append(embed.footer.text)
+        if embed.author and embed.author.name:
+            parts.append(embed.author.name)
+        if embed.author and embed.author.url:
+            parts.append(embed.author.url)
+        for field in embed.fields:
+            if field.name:
+                parts.append(field.name)
+            if field.value:
+                parts.append(field.value)
+    return "\n".join(parts)
 
 
 class AutoMod(commands.Cog):
@@ -97,15 +124,18 @@ class AutoMod(commands.Cog):
         settings = await db.get_guild_settings(message.guild.id)
 
         # ── Invite-link filter (applies to bots AND users) ───────
-        if settings.get("anti_invite", True) and INVITE_RE.search(message.content):
-            is_member = isinstance(message.author, discord.Member)
-            exempt = (
-                is_member
-                and message.author.guild_permissions.manage_messages
-            )
-            if not exempt:
-                await self._handle_invite(message, settings)
-                return  # already handled, skip mention check
+        if settings.get("anti_invite", True):
+            full_text = _collect_text(message)
+            if INVITE_RE.search(full_text):
+                # Only exempt *human* moderators, never bots
+                is_human_mod = (
+                    isinstance(message.author, discord.Member)
+                    and not message.author.bot
+                    and message.author.guild_permissions.manage_messages
+                )
+                if not is_human_mod:
+                    await self._handle_invite(message, settings, full_text)
+                    return
 
         # ── Mention abuse (users only) ───────────────────────────
         if message.author.bot:
@@ -169,11 +199,12 @@ class AutoMod(commands.Cog):
         self,
         message: discord.Message,
         settings: dict,
+        full_text: str,
     ) -> None:
         assert message.guild is not None
 
         # Allow invites that point to the current server
-        invite_codes = INVITE_RE.findall(message.content)
+        invite_codes = INVITE_RE.findall(full_text)
         try:
             guild_invites = await message.guild.invites()
             guild_codes = {inv.code for inv in guild_invites}
@@ -192,29 +223,57 @@ class AutoMod(commands.Cog):
         if all_own:
             return
 
+        # Delete the message
         try:
             await message.delete()
         except discord.HTTPException:
-            pass
+            log.warning(
+                "Could not delete invite-spam message %s in guild %s — "
+                "check that ExeGuard has Manage Messages permission and "
+                "its role is above the spammer's role.",
+                message.id,
+                message.guild.id,
+            )
 
-        action = "Message deleted"
-        # Timeout the author if they are a regular member (not a bot)
-        if isinstance(message.author, discord.Member) and not message.author.bot:
-            timeout_secs = settings.get("timeout_duration", SPAM_TIMEOUT_DURATION)
+        actions: list[str] = ["Message deleted"]
+
+        # If it was sent via a webhook, also nuke the webhook
+        if message.webhook_id:
             try:
-                await message.author.timeout(
-                    timedelta(seconds=timeout_secs),
-                    reason="ExeGuard: Discord invite link",
-                )
-                action = f"Timed out for {timeout_secs}s"
+                wh = await self.bot.fetch_webhook(message.webhook_id)
+                await wh.delete(reason="ExeGuard: Webhook used for invite spam")
+                actions.append("Webhook deleted")
             except discord.HTTPException:
                 pass
+
+        # Timeout human spammers; ban repeat-offending bots
+        if isinstance(message.author, discord.Member):
+            if message.author.bot:
+                try:
+                    await message.author.ban(
+                        reason="ExeGuard: Bot spamming Discord invite links",
+                    )
+                    actions.append("Bot banned")
+                except discord.HTTPException:
+                    pass
+            else:
+                timeout_secs = settings.get(
+                    "timeout_duration", SPAM_TIMEOUT_DURATION
+                )
+                try:
+                    await message.author.timeout(
+                        timedelta(seconds=timeout_secs),
+                        reason="ExeGuard: Discord invite link",
+                    )
+                    actions.append(f"Timed out for {timeout_secs}s")
+                except discord.HTTPException:
+                    pass
 
         embed = EmbedBuilder.security(
             "Invite Link Blocked",
             f"**User:** {message.author.mention}\n"
             f"**Reason:** Unauthorized Discord invite link\n"
-            f"**Action:** {action}",
+            f"**Action:** {' · '.join(actions)}",
         )
         try:
             await message.channel.send(embed=embed, delete_after=10)
