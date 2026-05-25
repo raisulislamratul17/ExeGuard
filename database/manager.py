@@ -49,7 +49,8 @@ class DatabaseManager:
                 raid_level   TEXT DEFAULT 'medium',
                 spam_threshold INTEGER DEFAULT 5,
                 spam_interval  REAL DEFAULT 5.0,
-                timeout_duration INTEGER DEFAULT 300
+                timeout_duration INTEGER DEFAULT 300,
+                anti_invite  INTEGER DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS warnings (
@@ -91,6 +92,19 @@ class DatabaseManager:
             """
         )
         await self.conn.commit()
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        """Add columns that may be missing in older databases."""
+        async with self.conn.execute(
+            "PRAGMA table_info(guild_settings)"
+        ) as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        if "anti_invite" not in columns:
+            await self.conn.execute(
+                "ALTER TABLE guild_settings ADD COLUMN anti_invite INTEGER DEFAULT 1"
+            )
+            await self.conn.commit()
 
     # ── Guild settings helpers ──────────────────────────────────────
 
