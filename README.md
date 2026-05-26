@@ -16,6 +16,8 @@ Automatically detects and punishes:
 - **Mention spam** — mass-mentioning users or roles
 - **Caps spam** — excessive use of capital letters
 - **Link spam** — posting too many links
+- **Blacklisted Words** — custom word/phrase filtering
+- **External App Spam** — blocks unauthorized User-Installed Apps from posting (e.g., promo bots)
 
 **Punishment escalation:** Warning → Timeout → Ban (after repeated offenses)
 
@@ -39,12 +41,12 @@ Monitors audit logs for destructive actions:
 
 ### AutoMod
 - **Webhook protection** — deletes unauthorized webhooks
-- **Mention abuse protection** — detects @everyone/@here abuse and mass mentions, auto-timeouts the user
+- **@everyone/@here protection** — detects abuse and auto-timeouts the user
 
 ### Member Verification
 Gate new members before they access the server:
 - **Button verification** — simple one-click verify
-- **Captcha verification** — users must solve a captcha code
+- **Captcha verification** — users must solve a captcha code (3 attempt limit)
 
 ### Comprehensive Logging
 Logs all server events to dedicated channels:
@@ -53,6 +55,14 @@ Logs all server events to dedicated channels:
 - Role creates, deletes, and updates
 - Channel creates and deletes
 - Webhook changes
+
+### Moderation & Security Dashboard
+- **Ban/Kick/Timeout/Purge/Warn** — standard moderation tools
+- **Tempbans** — temporary bans with auto-unban
+- **Security Audit** — real-time server security scoring (0-100)
+- **Panic Mode** — emergency lockdown with one command
+- **Bot Protection** — prevents staff from accidentally banning invited bots
+- **Command Cooldowns** — rate limits on all slash commands to prevent abuse
 
 ---
 
@@ -78,15 +88,22 @@ pip install -r requirements.txt
 3. Configure your `.env` file:
 ```env
 DISCORD_TOKEN=your_bot_token_here
-BOT_PREFIX=\
+BOT_PREFIX=!
 OWNER_IDS=your_discord_user_id
 DATABASE_PATH=data/exeguard.db
+PORT=8080
 ```
 
 4. Run the bot:
 ```bash
 python main.py
 ```
+
+### Deploying to Render / Replit
+ExeGuard includes a built-in web server to keep the bot alive on hosting platforms that require open ports.
+
+1. **Render**: Set service type to **Web Service**, build command `pip install -r requirements.txt`, start command `python main.py`.
+2. **Keep it awake**: Use a free uptime monitor (e.g., [UptimeRobot](https://uptimerobot.com)) to ping your Render URL every 5 minutes to prevent the free tier from sleeping.
 
 ### Quick Setup in Discord
 Once the bot is running and invited to your server, run:
@@ -112,28 +129,32 @@ Once the bot is running and invited to your server, run:
 |---------|-------------|------------|
 | `/antinuke <enabled>` | Enable or disable anti-nuke protection | Administrator |
 | `/antiraid <level>` | Set anti-raid protection level: `low`, `medium`, or `high` | Manage Server |
-| `/antispam [enabled] [threshold] [timeout]` | Configure anti-spam settings | Manage Server |
+| `/antispam [...]` | Configure anti-spam settings (thresholds, limits, links, invites) | Manage Server |
+| `/blockuserapps <enabled>` | Toggle blocking unauthorized external app messages (e.g., spam bots) | Manage Server |
+| `/botprotection <enabled>` | Prevent accidental bans/kicks of invited bots | Manage Server |
 
 ### Moderation
 
 | Command | Description | Permission |
 |---------|-------------|------------|
 | `/ban <user> [reason]` | Ban a user from the server | Ban Members |
+| `/tempban <user> <duration> [reason]` | Temporarily ban a user with auto-expiry | Ban Members |
 | `/kick <member> [reason]` | Kick a member from the server | Kick Members |
-| `/timeout <member> [duration] [reason]` | Timeout a member (default: 300 seconds) | Moderate Members |
+| `/timeout <member> [duration] [reason]` | Timeout a member (e.g., `10m`, `1h`) | Moderate Members |
 | `/warn <member> [reason]` | Warn a member (also DMs them) | Manage Messages |
 | `/purge <amount>` | Bulk delete messages (max 100) | Manage Messages |
 | `/lock [channel]` | Lock a channel (prevent members from sending messages) | Manage Channels |
 | `/unlock [channel]` | Unlock a channel | Manage Channels |
+| `/panic <enabled>` | Emergency panic mode — locks all channels and maxes protections | Administrator |
 
-### Server Control
+### Security Dashboard
 
 | Command | Description | Permission |
 |---------|-------------|------------|
-| `/lockdown` | Manually lock down the entire server | Manage Server |
-| `/unlockdown` | Lift the server lockdown | Manage Server |
+| `/security-audit` | Scan server for vulnerabilities and get a security score | Manage Server |
 | `/trust <user>` | Add a trusted admin (exempt from anti-nuke detection) | Administrator |
 | `/untrust <user>` | Remove a user from the trusted admin list | Administrator |
+| `/trustbots <enabled>` | Toggle whether all bots are exempt from anti-nuke | Administrator |
 
 ### Verification
 
@@ -163,6 +184,8 @@ Once the bot is running and invited to your server, run:
 | Nuke action threshold | 3 actions |
 | Nuke action interval | 10 seconds |
 | Verification timeout | 300 seconds |
+| External App Blocking | Enabled by default |
+| Bot Protection | Enabled by default |
 
 ---
 
@@ -178,6 +201,7 @@ Make sure to enable the following when inviting ExeGuard:
 - **Manage Webhooks**
 - **Send Messages**
 - **Read Message History**
+- **Use External Apps** (for verification and logging)
 
 Also enable **all Privileged Gateway Intents** (Presence, Server Members, Message Content) in the Discord Developer Portal.
 
@@ -187,6 +211,7 @@ Also enable **all Privileged Gateway Intents** (Presence, Server Members, Messag
 - **Python** with **discord.py**
 - **aiosqlite** for async SQLite database
 - **python-dotenv** for environment configuration
+- **aiohttp** for hosting platform web server (Render/Replit uptime)
 
 ---
 
