@@ -222,82 +222,89 @@ class AntiSpam(commands.Cog):
 
     # ── Listener ────────────────────────────────────────────────────
 
+    def _is_external_app(self, message: discord.Message) -> tuple[bool, discord.Member | None]:
+        if not message.author.bot or message.webhook_id is not None:
+            return False, None
+        if message.guild.get_member(message.author.id) is not None:
+            return False, None
+        trigger_user = None
+        if message.interaction:
+            trigger_user = message.interaction.user
+        elif hasattr(message, "interaction_metadata") and message.interaction_metadata:
+            trigger_user = message.interaction_metadata.user
+        return True, trigger_user
+
+    async def _handle_external_app_spam(
+        self, message: discord.Message, trigger_user: discord.User | discord.Member
+    ) -> None:
+        assert message.guild is not None
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
+
+        guild_member = message.guild.get_member(trigger_user.id)
+        if not guild_member or guild_member.guild_permissions.manage_messages:
+            return
+
+        db = self.bot.db  # type: ignore[attr-defined]
+        settings = await db.get_guild_settings(message.guild.id)
+        timeout_secs = settings.get("timeout_duration", 300)
+
+        data = self._guild_data(message.guild.id, guild_member.id)
+        data.infractions += 1
+
+        if data.infractions >= 3:
+            try:
+                await guild_member.ban(reason="ExeGuard: Spammed via external User App")
+            except discord.HTTPException:
+                pass
+            action = "banned"
+        elif data.infractions >= 2:
+            try:
+                await guild_member.timeout(
+                    timedelta(seconds=timeout_secs),
+                    reason="ExeGuard: External App spam abuse",
+                )
+            except discord.HTTPException:
+                pass
+            action = f"timed out for {timeout_secs}s"
+        else:
+            action = "warned"
+
+        embed = EmbedBuilder.security(
+            "External App Spam Blocked",
+            f"**Triggering User:** {guild_member.mention}\n"
+            f"**App:** {message.author.mention}\n"
+            f"**Action:** User **{action}**.\n"
+            f"**Reason:** Unauthorized app spam / promo.",
+        )
+        try:
+            await message.channel.send(embed=embed, delete_after=15)
+        except discord.HTTPException:
+            pass
+
+        log_channel_id = settings.get("log_channel")
+        if log_channel_id:
+            channel = message.guild.get_channel(log_channel_id)
+            if isinstance(channel, discord.TextChannel):
+                try:
+                    await channel.send(embed=embed)
+                except discord.HTTPException:
+                    pass
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if not message.guild:
             return
 
-        # Check if this is an external unauthorized User-Installed App
-        is_external_app = False
-        if message.author.bot and message.webhook_id is None:
-            # Invited bots are members of the server, external user apps are not
-            member = message.guild.get_member(message.author.id)
-            if member is None:
-                is_external_app = True
-
-        if is_external_app:
-            # Instantly delete the spam message
-            try:
-                await message.delete()
-            except discord.HTTPException:
-                pass
-
-            # Extract the triggering user who ran the application command
-            trigger_user = None
-            if message.interaction:
-                trigger_user = message.interaction.user
-            elif hasattr(message, "interaction_metadata") and message.interaction_metadata:
-                trigger_user = message.interaction_metadata.user
-
-            if trigger_user:
-                guild_member = message.guild.get_member(trigger_user.id)
-                if guild_member and not guild_member.guild_permissions.manage_messages:
-                    db = self.bot.db  # type: ignore[attr-defined]
-                    settings = await db.get_guild_settings(message.guild.id)
-                    timeout_secs = settings.get("timeout_duration", 300)
-
-                    data = self._guild_data(message.guild.id, guild_member.id)
-                    data.infractions += 1
-
-                    if data.infractions >= 5:
-                        try:
-                            await guild_member.ban(reason="ExeGuard: Spamming via external User App")
-                        except discord.HTTPException:
-                            pass
-                        action = "banned"
-                    elif data.infractions >= 3:
-                        try:
-                            await guild_member.timeout(
-                                timedelta(seconds=timeout_secs),
-                                reason="ExeGuard: Spamming via external User App",
-                            )
-                        except discord.HTTPException:
-                            pass
-                        action = f"timed out for {timeout_secs}s"
-                    else:
-                        action = "warned"
-
-                    embed = EmbedBuilder.security(
-                        "External App Spam Blocked",
-                        f"**Triggering User:** {guild_member.mention} (`{guild_member.id}`)\n"
-                        f"**External App:** {message.author.mention} (`{message.author.id}`)\n"
-                        f"**Action:** Triggering user was **{action}**.\n"
-                        f"**Reason:** Attempted chat flood via unauthorized User App.",
-                    )
-                    try:
-                        await message.channel.send(embed=embed, delete_after=10)
-                    except discord.HTTPException:
-                        pass
-
-                    log_channel_id = settings.get("log_channel")
-                    if log_channel_id:
-                        channel = message.guild.get_channel(log_channel_id)
-                        if isinstance(channel, discord.TextChannel):
-                            try:
-                                await channel.send(embed=embed)
-                            except discord.HTTPException:
-                                pass
-            return
+        is_external_app, trigger_user = self._is_external_app(message)
+        if is_external_app and trigger_user:
+            db = self.bot.db  # type: ignore[attr-defined]
+            settings = await db.get_guild_settings(message.guild.id)
+            if settings.get("block_user_apps", 1):
+                await self._handle_external_app_spam(message, trigger_user)
+                return
 
         if await self._is_exempt(message):
             return
@@ -424,6 +431,26 @@ class AntiSpam(commands.Cog):
             f"**Timeout Duration:** {s['timeout_duration']}s",
         ]
         embed = EmbedBuilder.info("Anti-Spam Configuration Updated", "\n".join(lines))
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="blockuserapps",
+        description="Toggle blocking messages from unauthorized User-Installed Apps",
+    )
+    @app_commands.describe(enabled="Enable to block external app spam")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 10)
+    async def blockuserapps_cmd(
+        self, interaction: discord.Interaction, enabled: bool
+    ) -> None:
+        assert interaction.guild is not None
+        db = self.bot.db  # type: ignore[attr-defined]
+        await db.update_guild_setting(interaction.guild.id, "block_user_apps", int(enabled))
+        embed = EmbedBuilder.info(
+            "External App Blocking",
+            f"User-Installed App messages are now **{'blocked' if enabled else 'allowed'}**.\n"
+            f"Blocked apps will be deleted instantly and the triggering user punished.",
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── Badwords Group ──────────────────────────────────────────────

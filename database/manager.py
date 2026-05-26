@@ -103,7 +103,9 @@ class DatabaseManager:
             "spam_duplicate_interval": "REAL DEFAULT 10.0",
             "block_invites": "INTEGER DEFAULT 0",
             "block_links": "INTEGER DEFAULT 0",
-            "bad_words": "TEXT DEFAULT ''"
+            "bad_words": "TEXT DEFAULT ''",
+            "block_user_apps": "INTEGER DEFAULT 1",
+            "bot_protection": "INTEGER DEFAULT 1",
         }
 
         for col_name, col_type in new_cols.items():
@@ -148,6 +150,7 @@ class DatabaseManager:
         "spam_emoji_limit", "spam_mention_limit", "spam_caps_ratio",
         "spam_duplicate_threshold", "spam_duplicate_interval",
         "block_invites", "block_links", "bad_words",
+        "block_user_apps", "bot_protection",
     })
 
     async def update_guild_setting(

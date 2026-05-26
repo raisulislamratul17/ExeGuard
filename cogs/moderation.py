@@ -118,6 +118,26 @@ class Moderation(commands.Cog):
             return True
         return False
 
+    async def _protect_useful_bot(
+        self, interaction: discord.Interaction, user: discord.User | discord.Member
+    ) -> bool:
+        if not user.bot:
+            return False
+        guild = interaction.guild
+        assert guild is not None
+        db = self.bot.db  # type: ignore[attr-defined]
+        settings = await db.get_guild_settings(guild.id)
+        if not settings.get("bot_protection", 1):
+            return False
+        if guild.get_member(user.id):
+            await interaction.response.send_message(
+                f"⚠️ **{user.mention}** is an invited server bot. ExeGuard protects useful bots by default.\n"
+                f"If you are sure this is malicious, run `/botprotection enabled:False` first.",
+                ephemeral=True,
+            )
+            return True
+        return False
+
     async def _log_action(
         self,
         guild: discord.Guild,
@@ -148,6 +168,8 @@ class Moderation(commands.Cog):
     ) -> None:
         assert interaction.guild is not None
         if await self._protect_owner(interaction, user.id):
+            return
+        if await self._protect_useful_bot(interaction, user):
             return
         await interaction.guild.ban(user, reason=f"{interaction.user}: {reason}")
         db = self.bot.db  # type: ignore[attr-defined]
@@ -180,6 +202,8 @@ class Moderation(commands.Cog):
     ) -> None:
         assert interaction.guild is not None
         if await self._protect_owner(interaction, user.id):
+            return
+        if await self._protect_useful_bot(interaction, user):
             return
         db = self.bot.db  # type: ignore[attr-defined]
         
@@ -232,6 +256,8 @@ class Moderation(commands.Cog):
         assert interaction.guild is not None
         if await self._protect_owner(interaction, member.id):
             return
+        if await self._protect_useful_bot(interaction, member):
+            return
         await member.kick(reason=f"{interaction.user}: {reason}")
         db = self.bot.db  # type: ignore[attr-defined]
         await db.log_mod_action(
@@ -263,6 +289,8 @@ class Moderation(commands.Cog):
     ) -> None:
         assert interaction.guild is not None
         if await self._protect_owner(interaction, member.id):
+            return
+        if await self._protect_useful_bot(interaction, member):
             return
         seconds = parse_duration(duration)
         if seconds is None or seconds <= 0:
@@ -689,6 +717,26 @@ class Moderation(commands.Cog):
         embed.set_footer(text="ExeGuard Security Systems")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="botprotection",
+        description="Toggle protection for invited server bots",
+    )
+    @app_commands.describe(enabled="Enable to prevent accidental bans of useful bots")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 10)
+    async def botprotection_cmd(
+        self, interaction: discord.Interaction, enabled: bool
+    ) -> None:
+        assert interaction.guild is not None
+        db = self.bot.db  # type: ignore[attr-defined]
+        await db.update_guild_setting(interaction.guild.id, "bot_protection", int(enabled))
+        embed = EmbedBuilder.info(
+            "Bot Protection",
+            f"Protection for invited bots is now **{'enabled' if enabled else 'disabled'}**.\n"
+            f"Staff will be blocked from banning/kicking bots added to the server.",
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── Configuration Settings ──────────────────────────────────────
 
