@@ -12,9 +12,10 @@ import os
 import sys
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
-from config import BotConfig, COLOR_PRIMARY, EMBED_FOOTER
+from config import BotConfig, COLOR_PRIMARY, COLOR_DANGER, EMBED_FOOTER
 from database import DatabaseManager
 
 log = logging.getLogger("exeguard")
@@ -51,6 +52,45 @@ class ExeGuard(commands.Bot):
                 log.info("Loaded cog: %s", cog)
             except Exception:
                 log.exception("Failed to load cog: %s", cog)
+
+    async def on_app_command_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ) -> None:
+        if isinstance(error, app_commands.CommandOnCooldown):
+            embed = discord.Embed(
+                title="Cooldown Active",
+                description=f"Please wait {error.retry_after:.1f}s before using this command again.",
+                color=COLOR_PRIMARY,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        elif isinstance(error, app_commands.MissingPermissions):
+            embed = discord.Embed(
+                title="Missing Permissions",
+                description=f"You need the following permissions: {', '.join(error.missing_permissions)}",
+                color=COLOR_DANGER,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        elif isinstance(error, app_commands.BotMissingPermissions):
+            embed = discord.Embed(
+                title="Bot Missing Permissions",
+                description=f"I need the following permissions: {', '.join(error.missing_permissions)}",
+                color=COLOR_DANGER,
+            )
+            try:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            except discord.HTTPException:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            log.exception("Unhandled command error: %s", error)
+            embed = discord.Embed(
+                title="Error",
+                description="An unexpected error occurred. Please try again later.",
+                color=COLOR_DANGER,
+            )
+            try:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            except discord.HTTPException:
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def on_ready(self) -> None:
         assert self.user is not None

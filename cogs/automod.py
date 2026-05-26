@@ -12,7 +12,7 @@ from datetime import timedelta
 import discord
 from discord.ext import commands
 
-from config import SPAM_MENTION_LIMIT, SPAM_TIMEOUT_DURATION
+from config import SPAM_TIMEOUT_DURATION
 from utils.embed_builder import EmbedBuilder
 
 
@@ -91,17 +91,7 @@ class AutoMod(commands.Cog):
         if not settings.get("antispam", True):
             return
 
-        triggered = False
-        reason = ""
-
-        if message.mention_everyone:
-            triggered = True
-            reason = "@everyone/@here mention"
-        elif len(message.mentions) + len(message.role_mentions) > SPAM_MENTION_LIMIT:
-            triggered = True
-            reason = f"Mass mentions ({len(message.mentions) + len(message.role_mentions)})"
-
-        if not triggered:
+        if not message.mention_everyone:
             return
 
         try:
@@ -113,7 +103,7 @@ class AutoMod(commands.Cog):
         try:
             await message.author.timeout(
                 timedelta(seconds=timeout_secs),
-                reason=f"ExeGuard: {reason}",
+                reason="ExeGuard: @everyone/@here abuse",
             )
         except discord.HTTPException:
             pass
@@ -121,7 +111,7 @@ class AutoMod(commands.Cog):
         embed = EmbedBuilder.security(
             "Mention Abuse Detected",
             f"**User:** {message.author.mention}\n"
-            f"**Reason:** {reason}\n"
+            f"**Reason:** @everyone/@here abuse\n"
             f"**Action:** Timed out for {timeout_secs}s",
         )
         try:

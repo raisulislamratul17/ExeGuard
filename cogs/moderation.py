@@ -44,6 +44,8 @@ class Moderation(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self._tempban_lock = asyncio.Lock()
+        self._panic_locked: dict[int, set[int]] = {}
         self.check_tempbans.start()
 
     def cog_unload(self) -> None:
@@ -57,49 +59,64 @@ class Moderation(commands.Cog):
             return
         db = self.bot.db
         now_str = datetime.now(timezone.utc).isoformat()
-        try:
-            async with db.conn.execute(
-                "SELECT * FROM tempbans WHERE unban_timestamp <= ?", (now_str,)
-            ) as cursor:
-                rows = await cursor.fetchall()
+        async with self._tempban_lock:
+            try:
+                async with db.conn.execute(
+                    "SELECT * FROM tempbans WHERE unban_timestamp <= ?", (now_str,)
+                ) as cursor:
+                    rows = await cursor.fetchall()
 
-            for row in rows:
-                guild_id = row["guild_id"]
-                user_id = row["user_id"]
-                guild = self.bot.get_guild(guild_id)
-                if guild:
-                    try:
-                        user = await self.bot.fetch_user(user_id)
-                        await guild.unban(user, reason="ExeGuard: Tempban expired")
-                        
-                        settings = await db.get_guild_settings(guild_id)
-                        ch_id = settings.get("mod_log_channel") or settings.get("log_channel")
-                        if ch_id:
-                            ch = guild.get_channel(ch_id)
-                            if isinstance(ch, discord.TextChannel):
-                                embed = EmbedBuilder.success(
-                                    "Tempban Expired",
-                                    f"**User:** {user.mention} (`{user.id}`)\n"
-                                    f"**Action:** Automatically unbanned.",
-                                )
-                                await ch.send(embed=embed)
-                    except Exception:
-                        pass
+                for row in rows:
+                    guild_id = row["guild_id"]
+                    user_id = row["user_id"]
+                    guild = self.bot.get_guild(guild_id)
+                    if guild:
+                        try:
+                            user = await self.bot.fetch_user(user_id)
+                            await guild.unban(user, reason="ExeGuard: Tempban expired")
+                            
+                            settings = await db.get_guild_settings(guild_id)
+                            ch_id = settings.get("mod_log_channel") or settings.get("log_channel")
+                            if ch_id:
+                                ch = guild.get_channel(ch_id)
+                                if isinstance(ch, discord.TextChannel):
+                                    embed = EmbedBuilder.success(
+                                        "Tempban Expired",
+                                        f"**User:** {user.mention} (`{user.id}`)\n"
+                                        f"**Action:** Automatically unbanned.",
+                                    )
+                                    await ch.send(embed=embed)
+                        except Exception:
+                            pass
 
-                await db.conn.execute(
-                    "DELETE FROM tempbans WHERE guild_id = ? AND user_id = ?",
-                    (guild_id, user_id),
-                )
-            if rows:
-                await db.conn.commit()
-        except Exception:
-            pass
+                    await db.conn.execute(
+                        "DELETE FROM tempbans WHERE guild_id = ? AND user_id = ?",
+                        (guild_id, user_id),
+                    )
+                if rows:
+                    await db.conn.commit()
+            except Exception:
+                pass
 
     @check_tempbans.before_loop
     async def before_check_tempbans(self) -> None:
         await self.bot.wait_until_ready()
 
     # ── Helpers ─────────────────────────────────────────────────────
+
+    def _is_bot_owner(self, user_id: int) -> bool:
+        return user_id in self.bot.owner_ids if self.bot.owner_ids else False
+
+    async def _protect_owner(
+        self, interaction: discord.Interaction, user_id: int
+    ) -> bool:
+        if self._is_bot_owner(user_id):
+            await interaction.response.send_message(
+                "Cannot perform this action on the bot owner.",
+                ephemeral=True,
+            )
+            return True
+        return False
 
     async def _log_action(
         self,
@@ -122,6 +139,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="ban", description="Ban a user from the server")
     @app_commands.describe(user="User to ban", reason="Reason for the ban")
     @app_commands.checks.has_permissions(ban_members=True)
+    @app_commands.checks.cooldown(1, 5)
     async def ban_cmd(
         self,
         interaction: discord.Interaction,
@@ -129,6 +147,8 @@ class Moderation(commands.Cog):
         reason: str = "No reason provided",
     ) -> None:
         assert interaction.guild is not None
+        if await self._protect_owner(interaction, user.id):
+            return
         await interaction.guild.ban(user, reason=f"{interaction.user}: {reason}")
         db = self.bot.db  # type: ignore[attr-defined]
         await db.log_mod_action(
@@ -150,6 +170,7 @@ class Moderation(commands.Cog):
         reason="Reason for the ban",
     )
     @app_commands.checks.has_permissions(ban_members=True)
+    @app_commands.checks.cooldown(1, 5)
     async def tempban_cmd(
         self,
         interaction: discord.Interaction,
@@ -158,6 +179,8 @@ class Moderation(commands.Cog):
         reason: str = "No reason provided",
     ) -> None:
         assert interaction.guild is not None
+        if await self._protect_owner(interaction, user.id):
+            return
         db = self.bot.db  # type: ignore[attr-defined]
         
         seconds = parse_duration(duration)
@@ -199,6 +222,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="kick", description="Kick a member from the server")
     @app_commands.describe(member="Member to kick", reason="Reason for the kick")
     @app_commands.checks.has_permissions(kick_members=True)
+    @app_commands.checks.cooldown(1, 5)
     async def kick_cmd(
         self,
         interaction: discord.Interaction,
@@ -206,6 +230,8 @@ class Moderation(commands.Cog):
         reason: str = "No reason provided",
     ) -> None:
         assert interaction.guild is not None
+        if await self._protect_owner(interaction, member.id):
+            return
         await member.kick(reason=f"{interaction.user}: {reason}")
         db = self.bot.db  # type: ignore[attr-defined]
         await db.log_mod_action(
@@ -227,6 +253,7 @@ class Moderation(commands.Cog):
         reason="Reason for the timeout",
     )
     @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.cooldown(1, 5)
     async def timeout_cmd(
         self,
         interaction: discord.Interaction,
@@ -235,6 +262,8 @@ class Moderation(commands.Cog):
         reason: str = "No reason provided",
     ) -> None:
         assert interaction.guild is not None
+        if await self._protect_owner(interaction, member.id):
+            return
         seconds = parse_duration(duration)
         if seconds is None or seconds <= 0:
             await interaction.response.send_message(
@@ -267,6 +296,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="warn", description="Warn a member")
     @app_commands.describe(member="Member to warn", reason="Reason for the warning")
     @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.checks.cooldown(1, 3)
     async def warn_cmd(
         self,
         interaction: discord.Interaction,
@@ -392,6 +422,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="purge", description="Delete messages in bulk")
     @app_commands.describe(amount="Number of messages to delete (max 100)")
     @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.checks.cooldown(1, 10)
     async def purge_cmd(
         self,
         interaction: discord.Interaction,
@@ -410,6 +441,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="lock", description="Lock a channel")
     @app_commands.describe(channel="Channel to lock (defaults to current)")
     @app_commands.checks.has_permissions(manage_channels=True)
+    @app_commands.checks.cooldown(1, 5)
     async def lock_cmd(
         self,
         interaction: discord.Interaction,
@@ -434,6 +466,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="unlock", description="Unlock a channel")
     @app_commands.describe(channel="Channel to unlock (defaults to current)")
     @app_commands.checks.has_permissions(manage_channels=True)
+    @app_commands.checks.cooldown(1, 5)
     async def unlock_cmd(
         self,
         interaction: discord.Interaction,
@@ -460,6 +493,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="panic", description="Activate or deactivate Emergency Panic Lockdown mode")
     @app_commands.describe(enabled="Toggles server panic lockdown")
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.checks.cooldown(1, 30)
     async def panic_cmd(
         self, interaction: discord.Interaction, enabled: bool
     ) -> None:
@@ -469,14 +503,13 @@ class Moderation(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         if enabled:
-            # Enable maximum security on database settings
             await db.update_guild_setting(interaction.guild.id, "antispam", 1)
             await db.update_guild_setting(interaction.guild.id, "antiraid", 1)
             await db.update_guild_setting(interaction.guild.id, "raid_level", "high")
             await db.update_guild_setting(interaction.guild.id, "antinuke", 1)
             await db.update_guild_setting(interaction.guild.id, "verification", 1)
             
-            # Lock all channels
+            locked_channels = set()
             for ch in interaction.guild.text_channels:
                 try:
                     overwrite = ch.overwrites_for(interaction.guild.default_role)
@@ -487,8 +520,11 @@ class Moderation(commands.Cog):
                             overwrite=overwrite,
                             reason="ExeGuard: Emergency panic mode activated"
                         )
+                        locked_channels.add(ch.id)
                 except Exception:
                     pass
+
+            self._panic_locked[interaction.guild.id] = locked_channels
 
             embed = EmbedBuilder.security(
                 "Panic Mode Activated",
@@ -500,26 +536,28 @@ class Moderation(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             await self._log_action(interaction.guild, embed)
 
-            # Alert Guild Owner
             if interaction.guild.owner:
                 try:
                     await interaction.guild.owner.send(embed=embed)
                 except Exception:
                     pass
         else:
-            # Restore channel permissions
+            locked_channels = self._panic_locked.get(interaction.guild.id, set())
             for ch in interaction.guild.text_channels:
-                try:
-                    overwrite = ch.overwrites_for(interaction.guild.default_role)
-                    if overwrite.send_messages is False:
-                        overwrite.send_messages = None
-                        await ch.set_permissions(
-                            interaction.guild.default_role,
-                            overwrite=overwrite,
-                            reason="ExeGuard: Panic mode deactivated"
-                        )
-                except Exception:
-                    pass
+                if ch.id in locked_channels:
+                    try:
+                        overwrite = ch.overwrites_for(interaction.guild.default_role)
+                        if overwrite.send_messages is False:
+                            overwrite.send_messages = None
+                            await ch.set_permissions(
+                                interaction.guild.default_role,
+                                overwrite=overwrite,
+                                reason="ExeGuard: Panic mode deactivated"
+                            )
+                    except Exception:
+                        pass
+
+            self._panic_locked.pop(interaction.guild.id, None)
 
             embed = EmbedBuilder.success(
                 "Panic Mode Deactivated",
@@ -528,10 +566,15 @@ class Moderation(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             await self._log_action(interaction.guild, embed)
 
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        self._panic_locked.pop(guild.id, None)
+
     # ── Security Audit Command ──────────────────────────────────────
 
     @app_commands.command(name="security-audit", description="Analyze the guild's security status")
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 30)
     async def security_audit_cmd(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         db = self.bot.db  # type: ignore[attr-defined]
@@ -653,6 +696,7 @@ class Moderation(commands.Cog):
         name="settings", description="View current ExeGuard settings"
     )
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 5)
     async def settings_cmd(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         db = self.bot.db  # type: ignore[attr-defined]

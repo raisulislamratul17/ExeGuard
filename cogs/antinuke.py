@@ -15,7 +15,7 @@ from typing import Any
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from config import NUKE_ACTION_INTERVAL, NUKE_ACTION_THRESHOLD
 from utils.embed_builder import EmbedBuilder
@@ -39,9 +39,43 @@ class ActionTracker:
 class AntiNuke(commands.Cog):
     """Audit-log-based anti-nuke system."""
 
+    CLEANUP_INTERVAL = 300
+    ACTION_TTL = 60
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._trackers: dict[int, ActionTracker] = defaultdict(ActionTracker)
+        self._cleanup_task.start()
+
+    def cog_unload(self) -> None:
+        self._cleanup_task.cancel()
+
+    @tasks.loop(seconds=CLEANUP_INTERVAL)
+    async def _cleanup_task(self) -> None:
+        now = time.time()
+        stale_guilds = []
+        for guild_id, tracker in list(self._trackers.items()):
+            stale_users = []
+            for user_id, timestamps in tracker._actions.items():
+                tracker._actions[user_id] = [
+                    t for t in timestamps if now - t < self.ACTION_TTL
+                ]
+                if not tracker._actions[user_id]:
+                    stale_users.append(user_id)
+            for uid in stale_users:
+                del tracker._actions[uid]
+            if not tracker._actions:
+                stale_guilds.append(guild_id)
+        for gid in stale_guilds:
+            del self._trackers[gid]
+
+    @_cleanup_task.before_loop
+    async def _before_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        self._trackers.pop(guild.id, None)
 
     # ── Helpers ─────────────────────────────────────────────────────
 
@@ -58,6 +92,23 @@ class AntiNuke(commands.Cog):
             if settings.get("trust_all_bots", 1):
                 return True
         return False
+
+    async def _get_recent_auditor(
+        self,
+        guild: discord.Guild,
+        action: discord.AuditLogAction,
+        max_age: float = 5.0,
+    ) -> discord.User | None:
+        now = time.time()
+        async for entry in guild.audit_logs(limit=1, action=action):
+            if not entry.user:
+                continue
+            if entry.user.id == self.bot.user.id:  # type: ignore[union-attr]
+                continue
+            if (now - entry.created_at.timestamp()) > max_age:
+                continue
+            return entry.user
+        return None
 
     async def _handle_nuke_action(
         self,
@@ -124,50 +175,37 @@ class AntiNuke(commands.Cog):
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         guild = channel.guild
-        async for entry in guild.audit_logs(
-            limit=1, action=discord.AuditLogAction.channel_delete
-        ):
-            if entry.user:
-                await self._handle_nuke_action(
-                    guild, entry.user, f"Deleted channel #{channel.name}"
-                )
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.channel_delete)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Deleted channel #{channel.name}"
+            )
 
     @commands.Cog.listener()
     async def on_guild_role_delete(self, role: discord.Role) -> None:
         guild = role.guild
-        async for entry in guild.audit_logs(
-            limit=1, action=discord.AuditLogAction.role_delete
-        ):
-            if entry.user:
-                await self._handle_nuke_action(
-                    guild, entry.user, f"Deleted role @{role.name}"
-                )
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.role_delete)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Deleted role @{role.name}"
+            )
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User) -> None:
-        async for entry in guild.audit_logs(
-            limit=1, action=discord.AuditLogAction.ban
-        ):
-            if entry.user and entry.user.id != self.bot.user.id:  # type: ignore[union-attr]
-                await self._handle_nuke_action(
-                    guild, entry.user, f"Banned {user}"
-                )
+        auditor = await self._get_recent_auditor(guild, discord.AuditLogAction.ban)
+        if auditor:
+            await self._handle_nuke_action(
+                guild, auditor, f"Banned {user}"
+            )
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
         guild = member.guild
-        async for entry in guild.audit_logs(
-            limit=1, action=discord.AuditLogAction.kick
-        ):
-            if (
-                entry.user
-                and entry.target
-                and getattr(entry.target, "id", None) == member.id
-                and entry.user.id != self.bot.user.id  # type: ignore[union-attr]
-            ):
-                await self._handle_nuke_action(
-                    guild, entry.user, f"Kicked {member}"
-                )
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.kick)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Kicked {member}"
+            )
 
     @commands.Cog.listener()
     async def on_guild_role_update(
@@ -184,26 +222,22 @@ class AntiNuke(commands.Cog):
         if not any(gained & p.value for p in dangerous):
             return
         guild = after.guild
-        async for entry in guild.audit_logs(
-            limit=1, action=discord.AuditLogAction.role_update
-        ):
-            if entry.user:
-                await self._handle_nuke_action(
-                    guild,
-                    entry.user,
-                    f"Escalated permissions on @{after.name}",
-                )
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.role_update)
+        if user:
+            await self._handle_nuke_action(
+                guild,
+                user,
+                f"Escalated permissions on @{after.name}",
+            )
 
     @commands.Cog.listener()
     async def on_webhooks_update(self, channel: discord.TextChannel) -> None:
         guild = channel.guild
-        async for entry in guild.audit_logs(
-            limit=1, action=discord.AuditLogAction.webhook_create
-        ):
-            if entry.user:
-                await self._handle_nuke_action(
-                    guild, entry.user, f"Created webhook in #{channel.name}"
-                )
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.webhook_create)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Created webhook in #{channel.name}"
+            )
 
     # ── Slash commands ──────────────────────────────────────────────
 
@@ -212,6 +246,7 @@ class AntiNuke(commands.Cog):
     )
     @app_commands.describe(enabled="Enable or disable anti-nuke protection")
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.checks.cooldown(1, 10)
     async def antinuke_cmd(
         self, interaction: discord.Interaction, enabled: bool
     ) -> None:
@@ -232,6 +267,7 @@ class AntiNuke(commands.Cog):
     )
     @app_commands.describe(user="The user to trust")
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.checks.cooldown(1, 5)
     async def trust_cmd(
         self, interaction: discord.Interaction, user: discord.User
     ) -> None:
@@ -250,6 +286,7 @@ class AntiNuke(commands.Cog):
     )
     @app_commands.describe(user="The user to remove from trusted list")
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.checks.cooldown(1, 5)
     async def untrust_cmd(
         self, interaction: discord.Interaction, user: discord.User
     ) -> None:
@@ -267,6 +304,7 @@ class AntiNuke(commands.Cog):
     )
     @app_commands.describe(enabled="If true, all bots are exempt from anti-nuke checks")
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.checks.cooldown(1, 10)
     async def trustbots_cmd(
         self, interaction: discord.Interaction, enabled: bool
     ) -> None:

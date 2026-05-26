@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import random
 import string
+import time
 
 import discord
 from discord import app_commands
@@ -69,17 +70,30 @@ class CaptchaModal(discord.ui.Modal, title="Captcha Verification"):
         max_length=10,
     )
 
-    def __init__(self, code: str, role_id: int) -> None:
+    def __init__(self, code: str, role_id: int, attempts: int = 0) -> None:
         super().__init__()
         self.code = code
         self.role_id = role_id
+        self.attempts = attempts
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         assert isinstance(interaction.user, discord.Member)
-        if self.answer.value.upper() != self.code:
+        if self.attempts >= 3:
             await interaction.response.send_message(
-                "Incorrect captcha. Please try again.", ephemeral=True
+                "Too many failed attempts. Please click the button to get a new captcha.",
+                ephemeral=True,
+            )
+            return
+        if self.answer.value.upper() != self.code:
+            new_attempts = self.attempts + 1
+            remaining = 3 - new_attempts
+            await interaction.response.send_modal(
+                CaptchaModal(self.code, self.role_id, new_attempts)
+            )
+            await interaction.followup.send(
+                f"Incorrect. You have {remaining} attempt{'s' if remaining != 1 else ''} remaining.",
+                ephemeral=True,
             )
             return
         role = interaction.guild.get_role(self.role_id)
@@ -111,7 +125,7 @@ class CaptchaButton(View):
         self, interaction: discord.Interaction, button: Button[CaptchaButton]
     ) -> None:
         code = _generate_captcha()
-        await interaction.response.send_modal(CaptchaModal(code, self.role_id))
+        await interaction.response.send_modal(CaptchaModal(code, self.role_id, 0))
         await interaction.followup.send(
             f"Your captcha code is: **`{code}`**\nEnter it in the modal.",
             ephemeral=True,
@@ -149,6 +163,7 @@ class Verification(commands.Cog):
         role="The role granted on verification",
     )
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 10)
     async def verify_cmd(
         self,
         interaction: discord.Interaction,
@@ -198,6 +213,7 @@ class Verification(commands.Cog):
         verified_role="Role to assign on verification",
     )
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.checks.cooldown(1, 10)
     async def setup_cmd(
         self,
         interaction: discord.Interaction,
