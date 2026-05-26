@@ -12,6 +12,7 @@ import os
 import sys
 
 import discord
+from aiohttp import web
 from discord import app_commands
 from discord.ext import commands
 
@@ -29,6 +30,23 @@ COGS: list[str] = [
     "cogs.logging_cog",
     "cogs.automod",
 ]
+
+async def _run_webserver(port: int) -> None:
+    app = web.Application()
+
+    async def handle(request: web.Request) -> web.Response:
+        return web.json_response({"status": "ok", "service": "ExeGuard"})
+
+    async def handle_health(request: web.Request) -> web.Response:
+        return web.json_response({"status": "healthy"})
+
+    app.router.add_get("/", handle)
+    app.router.add_get("/health", handle_health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    log.info("Web server running on port %d", port)
 
 
 class ExeGuard(commands.Bot):
@@ -150,6 +168,10 @@ async def main() -> None:
     if not cfg.token:
         log.critical("DISCORD_TOKEN not set. Create a .env file — see .env.example")
         sys.exit(1)
+
+    port = int(os.getenv("PORT", 8080))
+    asyncio.create_task(_run_webserver(port))
+
     bot = ExeGuard(cfg)
     async with bot:
         await bot.start(cfg.token)
