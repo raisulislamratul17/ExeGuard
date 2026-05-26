@@ -15,7 +15,7 @@ from datetime import timedelta
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from config import SPAM_TIMEOUT_DURATION
 from utils.embed_builder import EmbedBuilder
@@ -43,11 +43,54 @@ class UserSpamData:
 class AntiSpam(commands.Cog):
     """Real-time anti-spam protection."""
 
+    CLEANUP_INTERVAL = 300  # 5 minutes
+    MESSAGE_TTL = 600  # 10 minutes max retention
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._data: dict[int, dict[int, UserSpamData]] = defaultdict(
             lambda: defaultdict(UserSpamData)
         )
+        self._cleanup_task.start()
+
+    def cog_unload(self) -> None:
+        self._cleanup_task.cancel()
+
+    @tasks.loop(seconds=CLEANUP_INTERVAL)
+    async def _cleanup_task(self) -> None:
+        now = time.time()
+        stale_guilds = []
+        for guild_id, users in list(self._data.items()):
+            stale_users = []
+            for user_id, data in users.items():
+                data.messages = [
+                    t for t in data.messages if now - t < self.MESSAGE_TTL
+                ]
+                data.contents = [
+                    (c, t) for c, t in data.contents if now - t < self.MESSAGE_TTL
+                ]
+                if not data.messages and not data.contents:
+                    data.infractions = 0
+                if (
+                    not data.messages
+                    and not data.contents
+                    and data.infractions == 0
+                ):
+                    stale_users.append(user_id)
+            for uid in stale_users:
+                del users[uid]
+            if not users:
+                stale_guilds.append(guild_id)
+        for gid in stale_guilds:
+            del self._data[gid]
+
+    @_cleanup_task.before_loop
+    async def _before_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        self._data.pop(guild.id, None)
 
     # ── Helpers ─────────────────────────────────────────────────────
 
@@ -326,6 +369,7 @@ class AntiSpam(commands.Cog):
         block_links="Enable/disable blocking all external links",
     )
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 10)
     async def antispam_cmd(
         self,
         interaction: discord.Interaction,
@@ -391,6 +435,7 @@ class AntiSpam(commands.Cog):
     @badwords_group.command(name="add", description="Add a word to the blacklist")
     @app_commands.describe(word="The word to blacklist")
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 5)
     async def badwords_add(self, interaction: discord.Interaction, word: str) -> None:
         assert interaction.guild is not None
         db = self.bot.db  # type: ignore[attr-defined]
@@ -420,6 +465,7 @@ class AntiSpam(commands.Cog):
     @badwords_group.command(name="remove", description="Remove a word from the blacklist")
     @app_commands.describe(word="The word to remove")
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 5)
     async def badwords_remove(self, interaction: discord.Interaction, word: str) -> None:
         assert interaction.guild is not None
         db = self.bot.db  # type: ignore[attr-defined]
@@ -444,6 +490,7 @@ class AntiSpam(commands.Cog):
 
     @badwords_group.command(name="list", description="List all blacklisted words")
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 5)
     async def badwords_list(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         db = self.bot.db  # type: ignore[attr-defined]

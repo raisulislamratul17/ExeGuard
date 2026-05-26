@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from config import (
     RAID_JOIN_INTERVAL,
@@ -38,10 +38,42 @@ SUSPICIOUS_NAME_FRAGMENTS = [
 class AntiRaid(commands.Cog):
     """Real-time raid detection and automatic lockdown."""
 
+    CLEANUP_INTERVAL = 300
+    JOIN_LOG_TTL = 60
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._join_log: dict[int, list[float]] = defaultdict(list)
         self._lockdowns: dict[int, bool] = {}
+        self._cleanup_task.start()
+
+    def cog_unload(self) -> None:
+        self._cleanup_task.cancel()
+
+    @tasks.loop(seconds=CLEANUP_INTERVAL)
+    async def _cleanup_task(self) -> None:
+        now = time.time()
+        stale_guilds = []
+        for guild_id, timestamps in list(self._join_log.items()):
+            self._join_log[guild_id] = [
+                t for t in timestamps if now - t < self.JOIN_LOG_TTL
+            ]
+            if not self._join_log[guild_id]:
+                stale_guilds.append(guild_id)
+        for gid in stale_guilds:
+            del self._join_log[gid]
+        for guild_id, locked in list(self._lockdowns.items()):
+            if not locked and guild_id not in self._join_log:
+                del self._lockdowns[guild_id]
+
+    @_cleanup_task.before_loop
+    async def _before_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        self._join_log.pop(guild.id, None)
+        self._lockdowns.pop(guild.id, None)
 
     # ── Helpers ─────────────────────────────────────────────────────
 
@@ -155,6 +187,7 @@ class AntiRaid(commands.Cog):
         name="lockdown", description="Manually lock down the server"
     )
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 30)
     async def lockdown_cmd(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
@@ -171,6 +204,7 @@ class AntiRaid(commands.Cog):
         name="unlockdown", description="Lift the server lockdown"
     )
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 10)
     async def unlockdown_cmd(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
@@ -186,6 +220,7 @@ class AntiRaid(commands.Cog):
     )
     @app_commands.describe(level="Protection level: low, medium, or high")
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 10)
     async def antiraid_cmd(
         self,
         interaction: discord.Interaction,

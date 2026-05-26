@@ -173,6 +173,7 @@ class Logging(commands.Cog):
         joins="Channel for join/leave logs",
     )
     @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 10)
     async def logs_cmd(
         self,
         interaction: discord.Interaction,

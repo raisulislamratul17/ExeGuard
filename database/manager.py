@@ -140,9 +140,21 @@ class DatabaseManager:
         await self.conn.commit()
         return await self.get_guild_settings(guild_id)
 
+    ALLOWED_COLUMNS = frozenset({
+        "antispam", "antiraid", "antinuke", "verification",
+        "log_channel", "mod_log_channel", "join_log_channel",
+        "verified_role", "raid_level", "spam_threshold",
+        "spam_interval", "timeout_duration", "trust_all_bots",
+        "spam_emoji_limit", "spam_mention_limit", "spam_caps_ratio",
+        "spam_duplicate_threshold", "spam_duplicate_interval",
+        "block_invites", "block_links", "bad_words",
+    })
+
     async def update_guild_setting(
         self, guild_id: int, key: str, value: Any
     ) -> None:
+        if key not in self.ALLOWED_COLUMNS:
+            raise ValueError(f"Invalid column name: {key}")
         await self.get_guild_settings(guild_id)
         await self.conn.execute(
             f"UPDATE guild_settings SET {key} = ? WHERE guild_id = ?",
