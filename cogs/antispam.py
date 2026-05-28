@@ -98,20 +98,32 @@ class AntiSpam(commands.Cog):
         return self._data[guild_id][user_id]
 
     async def _is_exempt(self, message: discord.Message) -> bool:
-        if message.author.bot or not message.guild:
+        if not message.guild:
             return True
-        assert isinstance(message.author, discord.Member)
-        if message.author.guild_permissions.manage_messages:
-            return True
+
         db = self.bot.db  # type: ignore[attr-defined]
         settings = await db.get_guild_settings(message.guild.id)
+
+        # If the author is a bot, check if all bots are trusted
+        if message.author.bot:
+            if settings.get("trust_all_bots", 1):
+                return True
+            if await db.is_trusted_admin(message.guild.id, message.author.id):
+                return True
+            # Untrusted bot is subject to anti-spam checks below
+        else:
+            assert isinstance(message.author, discord.Member)
+            if message.author.guild_permissions.manage_messages:
+                return True
+
         if not settings.get("antispam", True):
             return True
         if await db.is_channel_whitelisted(message.guild.id, message.channel.id):
             return True
-        for role in message.author.roles:
-            if await db.is_role_whitelisted(message.guild.id, role.id):
-                return True
+        if isinstance(message.author, discord.Member):
+            for role in message.author.roles:
+                if await db.is_role_whitelisted(message.guild.id, role.id):
+                    return True
         return False
 
     async def _punish(
@@ -222,20 +234,30 @@ class AntiSpam(commands.Cog):
 
     # ── Listener ────────────────────────────────────────────────────
 
-    def _is_external_app(self, message: discord.Message) -> tuple[bool, discord.Member | None]:
+    def _is_external_app(self, message: discord.Message) -> tuple[bool, discord.User | discord.Member | None]:
         if not message.author.bot or message.webhook_id is not None:
             return False, None
-        if message.guild.get_member(message.author.id) is not None:
-            return False, None
-        trigger_user = None
-        if message.interaction:
-            trigger_user = message.interaction.user
-        elif hasattr(message, "interaction_metadata") and message.interaction_metadata:
-            trigger_user = message.interaction_metadata.user
-        return True, trigger_user
+
+        # 1. Primary check: Use Discord's official interaction metadata if available
+        if hasattr(message, "interaction_metadata") and message.interaction_metadata:
+            metadata = message.interaction_metadata
+            # If it's explicitly a user-installed integration, it is an external app
+            if metadata.is_user_integration():
+                return True, metadata.user
+
+        # 2. Fallback check: If the bot is not a member of the guild, it must be an external app
+        if message.guild.get_member(message.author.id) is None:
+            trigger_user = None
+            if message.interaction:
+                trigger_user = message.interaction.user
+            elif hasattr(message, "interaction_metadata") and message.interaction_metadata:
+                trigger_user = message.interaction_metadata.user
+            return True, trigger_user
+
+        return False, None
 
     async def _handle_external_app_spam(
-        self, message: discord.Message, trigger_user: discord.User | discord.Member
+        self, message: discord.Message, trigger_user: discord.User | discord.Member | None
     ) -> None:
         assert message.guild is not None
         try:
@@ -243,39 +265,50 @@ class AntiSpam(commands.Cog):
         except discord.HTTPException:
             pass
 
-        guild_member = message.guild.get_member(trigger_user.id)
-        if not guild_member or guild_member.guild_permissions.manage_messages:
-            return
-
         db = self.bot.db  # type: ignore[attr-defined]
         settings = await db.get_guild_settings(message.guild.id)
         timeout_secs = settings.get("timeout_duration", 300)
 
-        data = self._guild_data(message.guild.id, guild_member.id)
-        data.infractions += 1
+        action = "none"
+        guild_member = None
 
-        if data.infractions >= 3:
-            try:
-                await guild_member.ban(reason="ExeGuard: Spammed via external User App")
-            except discord.HTTPException:
-                pass
-            action = "banned"
-        elif data.infractions >= 2:
-            try:
-                await guild_member.timeout(
-                    timedelta(seconds=timeout_secs),
-                    reason="ExeGuard: External App spam abuse",
-                )
-            except discord.HTTPException:
-                pass
-            action = f"timed out for {timeout_secs}s"
-        else:
-            action = "warned"
+        if trigger_user:
+            guild_member = message.guild.get_member(trigger_user.id)
+            if not guild_member:
+                try:
+                    guild_member = await message.guild.fetch_member(trigger_user.id)
+                except discord.HTTPException:
+                    pass
+
+        if guild_member and not guild_member.guild_permissions.manage_messages:
+            data = self._guild_data(message.guild.id, guild_member.id)
+            data.infractions += 1
+
+            if data.infractions >= 3:
+                try:
+                    await guild_member.ban(reason="ExeGuard: Spammed via external User App")
+                except discord.HTTPException:
+                    pass
+                action = "banned"
+            elif data.infractions >= 2:
+                try:
+                    await guild_member.timeout(
+                        timedelta(seconds=timeout_secs),
+                        reason="ExeGuard: External App spam abuse",
+                    )
+                except discord.HTTPException:
+                    pass
+                action = f"timed out for {timeout_secs}s"
+            else:
+                action = "warned"
+
+        user_mention = guild_member.mention if guild_member else (trigger_user.mention if trigger_user else "Unknown User")
+        app_mention = message.author.mention if message.author else "Unknown App"
 
         embed = EmbedBuilder.security(
             "External App Spam Blocked",
-            f"**Triggering User:** {guild_member.mention}\n"
-            f"**App:** {message.author.mention}\n"
+            f"**Triggering User:** {user_mention}\n"
+            f"**App:** {app_mention}\n"
             f"**Action:** User **{action}**.\n"
             f"**Reason:** Unauthorized app spam / promo.",
         )
@@ -299,7 +332,7 @@ class AntiSpam(commands.Cog):
             return
 
         is_external_app, trigger_user = self._is_external_app(message)
-        if is_external_app and trigger_user:
+        if is_external_app:
             db = self.bot.db  # type: ignore[attr-defined]
             settings = await db.get_guild_settings(message.guild.id)
             if settings.get("block_user_apps", 1):
