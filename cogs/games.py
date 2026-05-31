@@ -252,7 +252,7 @@ class Games(commands.Cog):
             return
         
         game = games_pkg.BetaRockPaperScissors(opponent)
-        # The game.start method in olympus expects a Context or Interaction
+        # The game.start method in ExeGuard expects a Context or Interaction
         # We need to adapt it or use a wrapper.
         # Based on Games.py, it takes ctx.
         # We'll try to pass interaction if it supports it, or a mock ctx.
