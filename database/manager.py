@@ -123,6 +123,42 @@ class DatabaseManager:
             );
             """
         )
+
+        # Create AFK table
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS afk (
+                user_id    INTEGER PRIMARY KEY,
+                reason     TEXT NOT NULL,
+                timestamp  REAL NOT NULL,
+                mentions   INTEGER DEFAULT 0
+            );
+            """
+        )
+
+        # Create auto_roles table
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_roles (
+                guild_id INTEGER NOT NULL,
+                role_id  INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, role_id)
+            );
+            """
+        )
+
+        # Create welcome_settings table
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS welcome_settings (
+                guild_id   INTEGER PRIMARY KEY,
+                channel_id INTEGER,
+                message    TEXT,
+                enabled    INTEGER DEFAULT 0
+            );
+            """
+        )
+
         await self.conn.commit()
 
     # ── Guild settings helpers ──────────────────────────────────────
@@ -133,14 +169,32 @@ class DatabaseManager:
         ) as cursor:
             row = await cursor.fetchone()
             if row:
-                return dict(row)
-        defaults = {"guild_id": guild_id}
+                out = dict(row)
+                for k, v in out.items():
+                    if v is None:
+                        out[k] = self._column_defaults.get(k)
+                return out
         await self.conn.execute(
             "INSERT OR IGNORE INTO guild_settings (guild_id) VALUES (?)",
             (guild_id,),
         )
         await self.conn.commit()
-        return await self.get_guild_settings(guild_id)
+        async with self.conn.execute(
+            "SELECT * FROM guild_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else {"guild_id": guild_id}
+
+    _column_defaults = {
+        "antispam": 1, "antiraid": 1, "antinuke": 1, "verification": 0,
+        "log_channel": None, "mod_log_channel": None, "join_log_channel": None,
+        "verified_role": None, "raid_level": "medium",
+        "spam_threshold": 5, "spam_interval": 5.0, "timeout_duration": 300,
+        "trust_all_bots": 1, "spam_emoji_limit": 10, "spam_mention_limit": 5,
+        "spam_caps_ratio": 0.7, "spam_duplicate_threshold": 3,
+        "spam_duplicate_interval": 10.0, "block_invites": 0, "block_links": 0,
+        "bad_words": "", "block_user_apps": 1, "bot_protection": 1,
+    }
 
     ALLOWED_COLUMNS = frozenset({
         "antispam", "antiraid", "antinuke", "verification",
@@ -254,5 +308,75 @@ class DatabaseManager:
         await self.conn.execute(
             "DELETE FROM trusted_admins WHERE guild_id = ? AND user_id = ?",
             (guild_id, user_id),
+        )
+        await self.conn.commit()
+
+    # ── AFK System ───────────────────────────────────────────────────
+
+    async def get_afk(self, user_id: int) -> dict[str, Any] | None:
+        async with self.conn.execute(
+            "SELECT * FROM afk WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def set_afk(self, user_id: int, reason: str, timestamp: float) -> None:
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO afk (user_id, reason, timestamp, mentions) VALUES (?, ?, ?, 0)",
+            (user_id, reason, timestamp),
+        )
+        await self.conn.commit()
+
+    async def remove_afk(self, user_id: int) -> None:
+        await self.conn.execute(
+            "DELETE FROM afk WHERE user_id = ?", (user_id,)
+        )
+        await self.conn.commit()
+
+    async def increment_afk_mentions(self, user_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE afk SET mentions = mentions + 1 WHERE user_id = ?",
+            (user_id,),
+        )
+        await self.conn.commit()
+
+    # ── AutoRole System ──────────────────────────────────────────────
+
+    async def get_auto_roles(self, guild_id: int) -> list[int]:
+        async with self.conn.execute(
+            "SELECT role_id FROM auto_roles WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [r["role_id"] for r in rows]
+
+    async def add_auto_role(self, guild_id: int, role_id: int) -> None:
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO auto_roles (guild_id, role_id) VALUES (?, ?)",
+            (guild_id, role_id),
+        )
+        await self.conn.commit()
+
+    async def remove_auto_role(self, guild_id: int, role_id: int) -> None:
+        await self.conn.execute(
+            "DELETE FROM auto_roles WHERE guild_id = ? AND role_id = ?",
+            (guild_id, role_id),
+        )
+        await self.conn.commit()
+
+    # ── Welcome System ───────────────────────────────────────────────
+
+    async def get_welcome_settings(self, guild_id: int) -> dict[str, Any] | None:
+        async with self.conn.execute(
+            "SELECT * FROM welcome_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def set_welcome_settings(
+        self, guild_id: int, channel_id: int, message: str, enabled: int
+    ) -> None:
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, ?, ?, ?)",
+            (guild_id, channel_id, message, enabled),
         )
         await self.conn.commit()

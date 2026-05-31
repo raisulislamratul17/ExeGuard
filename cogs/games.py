@@ -29,7 +29,7 @@ class Card:
         self.suit = suit
         self.value = value
         self.down = down
-        self.symbol = self.name[0].upper()
+        self.symbol = self.name if self.name == "10" else self.name[0].upper()
 
     @property
     def name(self) -> str:

@@ -8,9 +8,12 @@ and kicks suspicious accounts.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+
+log = logging.getLogger("exeguard.antiraid")
 
 import discord
 from discord import app_commands
@@ -52,19 +55,22 @@ class AntiRaid(commands.Cog):
 
     @tasks.loop(seconds=CLEANUP_INTERVAL)
     async def _cleanup_task(self) -> None:
-        now = time.time()
-        stale_guilds = []
-        for guild_id, timestamps in list(self._join_log.items()):
-            self._join_log[guild_id] = [
-                t for t in timestamps if now - t < self.JOIN_LOG_TTL
-            ]
-            if not self._join_log[guild_id]:
-                stale_guilds.append(guild_id)
-        for gid in stale_guilds:
-            del self._join_log[gid]
-        for guild_id, locked in list(self._lockdowns.items()):
-            if not locked and guild_id not in self._join_log:
-                del self._lockdowns[guild_id]
+        try:
+            now = time.time()
+            stale_guilds = []
+            for guild_id, timestamps in list(self._join_log.items()):
+                self._join_log[guild_id] = [
+                    t for t in timestamps if now - t < self.JOIN_LOG_TTL
+                ]
+                if not self._join_log[guild_id]:
+                    stale_guilds.append(guild_id)
+            for gid in stale_guilds:
+                del self._join_log[gid]
+            for guild_id, locked in list(self._lockdowns.items()):
+                if not locked and guild_id not in self._join_log:
+                    del self._lockdowns[guild_id]
+        except Exception:
+            log.exception("Anti-raid cleanup task failed")
 
     @_cleanup_task.before_loop
     async def _before_cleanup(self) -> None:
@@ -130,7 +136,8 @@ class AntiRaid(commands.Cog):
                     pass
 
         await asyncio.sleep(RAID_LOCKDOWN_DURATION)
-        await self._unlockdown(guild)
+        if guild in self.bot.guilds:
+            await self._unlockdown(guild)
 
     async def _unlockdown(self, guild: discord.Guild) -> None:
         for channel in guild.text_channels:
@@ -160,23 +167,23 @@ class AntiRaid(commands.Cog):
 
         raid_level = settings.get("raid_level", "medium")
 
+        # Always log the join for raid detection, even if we kick the user
+        raid_detected = await self._detect_raid(member.guild.id)
+
         if self._is_suspicious_name(member.name):
             try:
                 await member.kick(reason="ExeGuard: Suspicious username")
             except discord.HTTPException:
                 pass
-            return
-
-        if raid_level in ("medium", "high") and self._is_young_account(member):
+        elif raid_level in ("medium", "high") and self._is_young_account(member):
             try:
                 await member.kick(
                     reason="ExeGuard: Account too young during raid protection"
                 )
             except discord.HTTPException:
                 pass
-            return
 
-        if await self._detect_raid(member.guild.id):
+        if raid_detected:
             asyncio.create_task(
                 self._lockdown(member.guild, "Mass join detected")
             )

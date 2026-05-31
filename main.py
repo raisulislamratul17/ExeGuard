@@ -12,8 +12,6 @@ import os
 import sys
 
 import discord
-from aiohttp import web
-from discord import app_commands
 from discord.ext import commands
 
 from config import BotConfig, COLOR_PRIMARY, COLOR_DANGER, EMBED_FOOTER
@@ -29,24 +27,8 @@ COGS: list[str] = [
     "cogs.verification",
     "cogs.logging_cog",
     "cogs.automod",
+    "cogs.dashboard_api",
 ]
-
-async def _run_webserver(port: int) -> None:
-    app = web.Application()
-
-    async def handle(request: web.Request) -> web.Response:
-        return web.json_response({"status": "ok", "service": "ExeGuard"})
-
-    async def handle_health(request: web.Request) -> web.Response:
-        return web.json_response({"status": "healthy"})
-
-    app.router.add_get("/", handle)
-    app.router.add_get("/health", handle_health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    log.info("Web server running on port %d", port)
 
 
 class ExeGuard(commands.Bot):
@@ -61,6 +43,7 @@ class ExeGuard(commands.Bot):
         )
         self.cfg = cfg
         self.db = DatabaseManager(cfg.database_path)
+        self._ready_once = False
 
     async def setup_hook(self) -> None:
         await self.db.connect()
@@ -111,6 +94,10 @@ class ExeGuard(commands.Bot):
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def on_ready(self) -> None:
+        if self._ready_once:
+            log.info("Reconnected — skipping duplicate on_ready handlers")
+            return
+        self._ready_once = True
         assert self.user is not None
         log.info("Logged in as %s (ID: %s)", self.user, self.user.id)
         log.info("Connected to %d guilds", len(self.guilds))
@@ -168,9 +155,6 @@ async def main() -> None:
     if not cfg.token:
         log.critical("DISCORD_TOKEN not set. Create a .env file — see .env.example")
         sys.exit(1)
-
-    port = int(os.getenv("PORT", 8080))
-    asyncio.create_task(_run_webserver(port))
 
     bot = ExeGuard(cfg)
     async with bot:

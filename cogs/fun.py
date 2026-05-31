@@ -91,6 +91,7 @@ class Fun(commands.Cog):
 
     @app_commands.command(name="meme", description="Get a random meme")
     async def meme(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get("https://meme-api.com/gimme") as resp:
@@ -99,11 +100,11 @@ class Fun(commands.Cog):
                         embed = discord.Embed(title=data["title"], color=discord.Color.random())
                         embed.set_image(url=data["url"])
                         embed.set_footer(text=f"From r/{data['subreddit']}")
-                        await interaction.response.send_message(embed=embed)
+                        await interaction.followup.send(embed=embed)
                     else:
-                        await interaction.response.send_message("Failed to fetch meme.", ephemeral=True)
+                        await interaction.followup.send("Failed to fetch meme.", ephemeral=True)
         except Exception:
-            await interaction.response.send_message("An error occurred while fetching the meme.", ephemeral=True)
+            await interaction.followup.send("An error occurred while fetching the meme.", ephemeral=True)
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Fun(bot))

@@ -8,8 +8,12 @@ panic switch, and security-audit dashboards.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import time as time_module
 from datetime import datetime, timedelta, timezone
+
+log = logging.getLogger("exeguard.moderation")
 
 import discord
 from discord import app_commands
@@ -58,11 +62,11 @@ class Moderation(commands.Cog):
         if not hasattr(self.bot, "db"):
             return
         db = self.bot.db
-        now_str = datetime.now(timezone.utc).isoformat()
-        async with self._tempban_lock:
-            try:
+        now_ts = int(time_module.time())
+        try:
+            async with self._tempban_lock:
                 async with db.conn.execute(
-                    "SELECT * FROM tempbans WHERE unban_timestamp <= ?", (now_str,)
+                    "SELECT * FROM tempbans WHERE unban_timestamp <= ?", (now_ts,)
                 ) as cursor:
                     rows = await cursor.fetchall()
 
@@ -96,6 +100,8 @@ class Moderation(commands.Cog):
                 if rows:
                     await db.conn.commit()
             except Exception:
+                log.exception("Tempban check loop failed")
+            finally:
                 pass
 
     @check_tempbans.before_loop
@@ -216,7 +222,7 @@ class Moderation(commands.Cog):
             return
 
         unban_time = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-        unban_timestamp = unban_time.isoformat()
+        unban_timestamp = int(unban_time.timestamp())
 
         # Ban the user
         await interaction.guild.ban(user, reason=f"ExeGuard Tempban by {interaction.user} ({duration}): {reason}")
@@ -396,18 +402,17 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="delwarning", description="Delete a warning by ID")
-    @app_commands.describe(id="Warning ID to delete")
+    @app_commands.describe(warning_id="Warning ID to delete")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def delwarning_cmd(
-        self, interaction: discord.Interaction, id: int
+        self, interaction: discord.Interaction, warning_id: int
     ) -> None:
         assert interaction.guild is not None
         db = self.bot.db  # type: ignore[attr-defined]
         
-        # Check if warning exists and matches guild
         async with db.conn.execute(
             "SELECT * FROM warnings WHERE id = ? AND guild_id = ?",
-            (id, interaction.guild.id),
+            (warning_id, interaction.guild.id),
         ) as cursor:
             row = await cursor.fetchone()
         
@@ -417,11 +422,11 @@ class Moderation(commands.Cog):
             )
             return
 
-        await db.conn.execute("DELETE FROM warnings WHERE id = ?", (id,))
+        await db.conn.execute("DELETE FROM warnings WHERE id = ?", (warning_id,))
         await db.conn.commit()
 
         embed = EmbedBuilder.success(
-            "Warning Deleted", f"Warning **#{id}** has been successfully removed."
+            "Warning Deleted", f"Warning **#{warning_id}** has been successfully removed."
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -456,7 +461,9 @@ class Moderation(commands.Cog):
         interaction: discord.Interaction,
         amount: int,
     ) -> None:
-        assert isinstance(interaction.channel, discord.TextChannel)
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("This command only works in text channels.", ephemeral=True)
+            return
         amount = min(amount, 100)
         await interaction.response.defer(ephemeral=True)
         deleted = await interaction.channel.purge(limit=amount)
@@ -477,7 +484,9 @@ class Moderation(commands.Cog):
     ) -> None:
         assert interaction.guild is not None
         target = channel or interaction.channel
-        assert isinstance(target, discord.TextChannel)
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message("This command only works in text channels.", ephemeral=True)
+            return
         overwrite = target.overwrites_for(interaction.guild.default_role)
         overwrite.send_messages = False
         await target.set_permissions(
@@ -502,7 +511,9 @@ class Moderation(commands.Cog):
     ) -> None:
         assert interaction.guild is not None
         target = channel or interaction.channel
-        assert isinstance(target, discord.TextChannel)
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message("This command only works in text channels.", ephemeral=True)
+            return
         overwrite = target.overwrites_for(interaction.guild.default_role)
         overwrite.send_messages = None
         await target.set_permissions(

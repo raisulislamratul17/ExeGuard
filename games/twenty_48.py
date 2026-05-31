@@ -208,7 +208,7 @@ class Twenty48:
         return game_string
 
     def check_win(self) -> bool:
-        flattened = itertools.chain(*self.board)
+        flattened = list(itertools.chain(*self.board))
 
         for num in (2048, 4096, 8192):
             if num in flattened:

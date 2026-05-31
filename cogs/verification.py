@@ -6,9 +6,12 @@ new members before they gain full server access.
 
 from __future__ import annotations
 
+import logging
 import random
 import string
 import time
+
+log = logging.getLogger("exeguard.verification")
 
 import discord
 from discord import app_commands
@@ -126,10 +129,6 @@ class CaptchaButton(View):
     ) -> None:
         code = _generate_captcha()
         await interaction.response.send_modal(CaptchaModal(code, self.role_id, 0))
-        await interaction.followup.send(
-            f"Your captcha code is: **`{code}`**\nEnter it in the modal.",
-            ephemeral=True,
-        )
 
 
 # ── Cog ─────────────────────────────────────────────────────────────
@@ -143,14 +142,19 @@ class Verification(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
+        if hasattr(self, "_views_registered"):
+            return
+        self._views_registered = True
         db = self.bot.db  # type: ignore[attr-defined]
-        # Re-register persistent views for every guild with verification on
         for guild in self.bot.guilds:
             settings = await db.get_guild_settings(guild.id)
             role_id = settings.get("verified_role")
             if settings.get("verification") and role_id:
-                self.bot.add_view(VerifyButton(role_id))
-                self.bot.add_view(CaptchaButton(role_id))
+                try:
+                    self.bot.add_view(VerifyButton(role_id))
+                    self.bot.add_view(CaptchaButton(role_id))
+                except Exception:
+                    log.warning("Failed to register persistent view for guild %s", guild.id)
 
     # ── Slash commands ──────────────────────────────────────────────
 

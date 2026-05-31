@@ -7,6 +7,7 @@ or bans offending users based on configurable thresholds.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from collections import defaultdict
@@ -19,6 +20,8 @@ from discord.ext import commands, tasks
 
 from config import SPAM_TIMEOUT_DURATION
 from utils.embed_builder import EmbedBuilder
+
+log = logging.getLogger("exeguard.antispam")
 
 EMOJI_RE = re.compile(
     r"<a?:\w+:\d+>|[\U0001f600-\U0001f64f\U0001f300-\U0001f5ff"
@@ -58,31 +61,34 @@ class AntiSpam(commands.Cog):
 
     @tasks.loop(seconds=CLEANUP_INTERVAL)
     async def _cleanup_task(self) -> None:
-        now = time.time()
-        stale_guilds = []
-        for guild_id, users in list(self._data.items()):
-            stale_users = []
-            for user_id, data in users.items():
-                data.messages = [
-                    t for t in data.messages if now - t < self.MESSAGE_TTL
-                ]
-                data.contents = [
-                    (c, t) for c, t in data.contents if now - t < self.MESSAGE_TTL
-                ]
-                if not data.messages and not data.contents:
-                    data.infractions = 0
-                if (
-                    not data.messages
-                    and not data.contents
-                    and data.infractions == 0
-                ):
-                    stale_users.append(user_id)
-            for uid in stale_users:
-                del users[uid]
-            if not users:
-                stale_guilds.append(guild_id)
-        for gid in stale_guilds:
-            del self._data[gid]
+        try:
+            now = time.time()
+            stale_guilds = []
+            for guild_id, users in list(self._data.items()):
+                stale_users = []
+                for user_id, data in users.items():
+                    data.messages = [
+                        t for t in data.messages if now - t < self.MESSAGE_TTL
+                    ]
+                    data.contents = [
+                        (c, t) for c, t in data.contents if now - t < self.MESSAGE_TTL
+                    ]
+                    if not data.messages and not data.contents:
+                        data.infractions = 0
+                    if (
+                        not data.messages
+                        and not data.contents
+                        and data.infractions == 0
+                    ):
+                        stale_users.append(user_id)
+                for uid in stale_users:
+                    del users[uid]
+                if not users:
+                    stale_guilds.append(guild_id)
+            for gid in stale_guilds:
+                del self._data[gid]
+        except Exception:
+            log.exception("Anti-spam cleanup task failed")
 
     @_cleanup_task.before_loop
     async def _before_cleanup(self) -> None:
@@ -265,10 +271,6 @@ class AntiSpam(commands.Cog):
         self, message: discord.Message, trigger_user: discord.User | discord.Member | None
     ) -> None:
         assert message.guild is not None
-        try:
-            await message.delete()
-        except discord.HTTPException:
-            pass
 
         db = self.bot.db  # type: ignore[attr-defined]
         settings = await db.get_guild_settings(message.guild.id)
@@ -284,7 +286,15 @@ class AntiSpam(commands.Cog):
                 except discord.HTTPException:
                     pass
 
-        if guild_member and not guild_member.guild_permissions.manage_messages:
+        # Only delete and punish if the trigger user is not trusted
+        if guild_member and guild_member.guild_permissions.manage_messages:
+            action = "skipped (trusted user)"
+        elif guild_member:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+
             data = self._guild_data(message.guild.id, guild_member.id)
             data.infractions += 1
 
@@ -296,7 +306,6 @@ class AntiSpam(commands.Cog):
                 action = "banned"
             else:
                 try:
-                    # 15 minutes timeout = 900 seconds
                     await guild_member.timeout(
                         timedelta(minutes=15),
                         reason="ExeGuard: Unauthorized external app usage (15m timeout)",
@@ -304,7 +313,11 @@ class AntiSpam(commands.Cog):
                 except discord.HTTPException:
                     pass
                 action = "timed out (15m)"
-        elif not guild_member:
+        else:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
             action = "blocked (user not in server)"
 
         user_mention = guild_member.mention if guild_member else (trigger_user.mention if trigger_user else "Unknown User")
@@ -354,17 +367,17 @@ class AntiSpam(commands.Cog):
         db = self.bot.db  # type: ignore[attr-defined]
         settings = await db.get_guild_settings(message.guild.id)
 
-        # Retrieve dynamic settings
-        spam_threshold = settings.get("spam_threshold", 5)
-        spam_interval = settings.get("spam_interval", 5.0)
-        dup_threshold = settings.get("spam_duplicate_threshold", 3)
-        dup_interval = settings.get("spam_duplicate_interval", 10.0)
-        emoji_limit = settings.get("spam_emoji_limit", 10)
-        mention_limit = settings.get("spam_mention_limit", 5)
-        caps_ratio = settings.get("spam_caps_ratio", 0.7)
-        block_invites = settings.get("block_invites", 0)
-        block_links = settings.get("block_links", 0)
-        bad_words = settings.get("bad_words", "")
+        # Retrieve dynamic settings (use `or` to handle NULL columns from migration)
+        spam_threshold = settings.get("spam_threshold") or 5
+        spam_interval = settings.get("spam_interval") or 5.0
+        dup_threshold = settings.get("spam_duplicate_threshold") or 3
+        dup_interval = settings.get("spam_duplicate_interval") or 10.0
+        emoji_limit = settings.get("spam_emoji_limit") or 10
+        mention_limit = settings.get("spam_mention_limit") or 5
+        caps_ratio = settings.get("spam_caps_ratio") or 0.7
+        block_invites = settings.get("block_invites") or 0
+        block_links = settings.get("block_links") or 0
+        bad_words = settings.get("bad_words") or ""
 
         # 1. Bad Words Filter
         if self._check_bad_words(content, bad_words):

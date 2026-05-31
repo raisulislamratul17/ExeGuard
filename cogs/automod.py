@@ -37,6 +37,7 @@ class AutoMod(commands.Cog):
             return
 
         guild = channel.guild
+        processed = []
         async for entry in guild.audit_logs(
             limit=5, action=discord.AuditLogAction.webhook_create
         ):
@@ -44,12 +45,15 @@ class AutoMod(commands.Cog):
                 continue
             if entry.user.id == self.bot.user.id:  # type: ignore[union-attr]
                 continue
+            if entry.user.id in processed:
+                continue
             if await db.is_trusted_admin(guild.id, entry.user.id):
                 continue
             if guild.owner_id == entry.user.id:
                 continue
             if entry.user.bot and settings.get("trust_all_bots", 1):
                 continue
+            processed.append(entry.user.id)
 
             for wh in webhooks:
                 if wh.user and wh.user.id == entry.user.id:
@@ -74,7 +78,6 @@ class AutoMod(commands.Cog):
                         await log_ch.send(embed=embed)
                     except discord.HTTPException:
                         pass
-            break
 
     # ── Mention protection ──────────────────────────────────────────
 

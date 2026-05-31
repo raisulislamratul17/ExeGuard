@@ -8,10 +8,13 @@ reverts actions, bans the offender, and notifies admins.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+log = logging.getLogger("exeguard.antinuke")
 
 import discord
 from discord import app_commands
@@ -52,22 +55,25 @@ class AntiNuke(commands.Cog):
 
     @tasks.loop(seconds=CLEANUP_INTERVAL)
     async def _cleanup_task(self) -> None:
-        now = time.time()
-        stale_guilds = []
-        for guild_id, tracker in list(self._trackers.items()):
-            stale_users = []
-            for user_id, timestamps in tracker._actions.items():
-                tracker._actions[user_id] = [
-                    t for t in timestamps if now - t < self.ACTION_TTL
-                ]
-                if not tracker._actions[user_id]:
-                    stale_users.append(user_id)
-            for uid in stale_users:
-                del tracker._actions[uid]
-            if not tracker._actions:
-                stale_guilds.append(guild_id)
-        for gid in stale_guilds:
-            del self._trackers[gid]
+        try:
+            now = time.time()
+            stale_guilds = []
+            for guild_id, tracker in list(self._trackers.items()):
+                stale_users = []
+                for user_id, timestamps in tracker._actions.items():
+                    tracker._actions[user_id] = [
+                        t for t in timestamps if now - t < self.ACTION_TTL
+                    ]
+                    if not tracker._actions[user_id]:
+                        stale_users.append(user_id)
+                for uid in stale_users:
+                    del tracker._actions[uid]
+                if not tracker._actions:
+                    stale_guilds.append(guild_id)
+            for gid in stale_guilds:
+                del self._trackers[gid]
+        except Exception:
+            log.exception("Anti-nuke cleanup task failed")
 
     @_cleanup_task.before_loop
     async def _before_cleanup(self) -> None:
@@ -146,6 +152,14 @@ class AntiNuke(commands.Cog):
                             )
                 except discord.HTTPException:
                     pass
+        else:
+            try:
+                await guild.ban(
+                    discord.Object(id=user.id),
+                    reason=f"ExeGuard anti-nuke: {action_desc} ({count} actions) — user already left",
+                )
+            except discord.HTTPException:
+                pass
 
         embed = EmbedBuilder.security(
             "Nuke Attempt Detected",
@@ -306,7 +320,7 @@ class AntiNuke(commands.Cog):
             await self._handle_nuke_action(guild, user, "Unauthorized integration created")
 
     @commands.Cog.listener()
-    async def on_webhooks_update(self, channel: discord.TextChannel) -> None:
+    async def on_webhooks_update(self, channel: discord.abc.GuildChannel) -> None:
         guild = channel.guild
         user = await self._get_recent_auditor(guild, discord.AuditLogAction.webhook_create)
         if user:

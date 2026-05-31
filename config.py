@@ -1,8 +1,11 @@
 """ExeGuard configuration module."""
 
+import logging
 import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
+
+log = logging.getLogger("exeguard.config")
 
 load_dotenv()
 
@@ -17,11 +20,20 @@ class BotConfig:
     database_path: str = field(
         default_factory=lambda: os.getenv("DATABASE_PATH", "data/exeguard.db")
     )
+    dashboard_api_key: str = field(
+        default_factory=lambda: os.getenv("DASHBOARD_API_KEY", "")
+    )
 
     def __post_init__(self) -> None:
         raw = os.getenv("OWNER_IDS", "")
         if raw:
-            self.owner_ids = [int(x.strip()) for x in raw.split(",") if x.strip()]
+            for x in raw.split(","):
+                x = x.strip()
+                if x:
+                    try:
+                        self.owner_ids.append(int(x))
+                    except ValueError:
+                        log.warning("Invalid owner ID in OWNER_IDS: %s", x)
 
 
 # ── Anti-Spam defaults ──────────────────────────────────────────────
