@@ -121,6 +121,37 @@ class DatabaseManager:
                 unban_timestamp TEXT NOT NULL,
                 PRIMARY KEY (guild_id, user_id)
             );
+
+            CREATE TABLE IF NOT EXISTS afk (
+                user_id INTEGER PRIMARY KEY,
+                reason  TEXT DEFAULT 'AFK',
+                timestamp REAL NOT NULL,
+                mentions INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS auto_roles (
+                guild_id INTEGER NOT NULL,
+                role_id  INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, role_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS welcome_settings (
+                guild_id INTEGER PRIMARY KEY,
+                channel_id INTEGER,
+                message TEXT,
+                enabled INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS giveaways (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER,
+                prize TEXT NOT NULL,
+                winners INTEGER DEFAULT 1,
+                end_timestamp REAL NOT NULL,
+                ended INTEGER DEFAULT 0
+            );
             """
         )
         await self.conn.commit()
@@ -256,3 +287,70 @@ class DatabaseManager:
             (guild_id, user_id),
         )
         await self.conn.commit()
+
+    # ── AFK ─────────────────────────────────────────────────────────
+
+    async def set_afk(self, user_id: int, reason: str, timestamp: float) -> None:
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO afk (user_id, reason, timestamp) VALUES (?, ?, ?)",
+            (user_id, reason, timestamp),
+        )
+        await self.conn.commit()
+
+    async def get_afk(self, user_id: int) -> dict[str, Any] | None:
+        async with self.conn.execute(
+            "SELECT * FROM afk WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def remove_afk(self, user_id: int) -> None:
+        await self.conn.execute("DELETE FROM afk WHERE user_id = ?", (user_id,))
+        await self.conn.commit()
+
+    async def increment_afk_mentions(self, user_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE afk SET mentions = mentions + 1 WHERE user_id = ?", (user_id,)
+        )
+        await self.conn.commit()
+
+    # ── Auto Roles ──────────────────────────────────────────────────
+
+    async def add_auto_role(self, guild_id: int, role_id: int) -> None:
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO auto_roles (guild_id, role_id) VALUES (?, ?)",
+            (guild_id, role_id),
+        )
+        await self.conn.commit()
+
+    async def remove_auto_role(self, guild_id: int, role_id: int) -> None:
+        await self.conn.execute(
+            "DELETE FROM auto_roles WHERE guild_id = ? AND role_id = ?",
+            (guild_id, role_id),
+        )
+        await self.conn.commit()
+
+    async def get_auto_roles(self, guild_id: int) -> list[int]:
+        async with self.conn.execute(
+            "SELECT role_id FROM auto_roles WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+    # ── Welcome ─────────────────────────────────────────────────────
+
+    async def set_welcome_settings(
+        self, guild_id: int, channel_id: int, message: str, enabled: int
+    ) -> None:
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, ?, ?, ?)",
+            (guild_id, channel_id, message, enabled),
+        )
+        await self.conn.commit()
+
+    async def get_welcome_settings(self, guild_id: int) -> dict[str, Any] | None:
+        async with self.conn.execute(
+            "SELECT * FROM welcome_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None

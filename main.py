@@ -29,6 +29,9 @@ COGS: list[str] = [
     "cogs.verification",
     "cogs.logging_cog",
     "cogs.automod",
+    "cogs.games",
+    "cogs.fun",
+    "cogs.utility",
 ]
 
 async def _run_webserver(port: int) -> None:

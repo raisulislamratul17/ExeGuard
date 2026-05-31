@@ -182,12 +182,41 @@ class AntiNuke(commands.Cog):
             )
 
     @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
+        guild = channel.guild
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.channel_create)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Created channel #{channel.name}"
+            )
+
+    @commands.Cog.listener()
+    async def on_guild_channel_update(
+        self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel
+    ) -> None:
+        guild = after.guild
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.channel_update)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Updated channel #{after.name}"
+            )
+
+    @commands.Cog.listener()
     async def on_guild_role_delete(self, role: discord.Role) -> None:
         guild = role.guild
         user = await self._get_recent_auditor(guild, discord.AuditLogAction.role_delete)
         if user:
             await self._handle_nuke_action(
                 guild, user, f"Deleted role @{role.name}"
+            )
+
+    @commands.Cog.listener()
+    async def on_guild_role_create(self, role: discord.Role) -> None:
+        guild = role.guild
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.role_create)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Created role @{role.name}"
             )
 
     @commands.Cog.listener()
@@ -205,6 +234,25 @@ class AntiNuke(commands.Cog):
         if user:
             await self._handle_nuke_action(
                 guild, user, f"Kicked {member}"
+            )
+
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member) -> None:
+        if not member.bot:
+            return
+        guild = member.guild
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.bot_add)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Added bot {member}"
+            )
+
+    @commands.Cog.listener()
+    async def on_guild_update(self, before: discord.Guild, after: discord.Guild) -> None:
+        user = await self._get_recent_auditor(after, discord.AuditLogAction.guild_update)
+        if user:
+            await self._handle_nuke_action(
+                after, user, "Updated server settings"
             )
 
     @commands.Cog.listener()
@@ -229,6 +277,33 @@ class AntiNuke(commands.Cog):
                 user,
                 f"Escalated permissions on @{after.name}",
             )
+
+    @commands.Cog.listener()
+    async def on_guild_emojis_update(
+        self, guild: discord.Guild, before: list[discord.Emoji], after: list[discord.Emoji]
+    ) -> None:
+        if len(after) >= len(before):
+            return
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.emoji_delete)
+        if user:
+            await self._handle_nuke_action(guild, user, "Mass emoji deletion")
+
+    @commands.Cog.listener()
+    async def on_guild_stickers_update(
+        self, guild: discord.Guild, before: list[discord.Sticker], after: list[discord.Sticker]
+    ) -> None:
+        if len(after) >= len(before):
+            return
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.sticker_delete)
+        if user:
+            await self._handle_nuke_action(guild, user, "Mass sticker deletion")
+
+    @commands.Cog.listener()
+    async def on_integration_create(self, integration: discord.Integration) -> None:
+        guild = integration.guild
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.integration_create)
+        if user:
+            await self._handle_nuke_action(guild, user, "Unauthorized integration created")
 
     @commands.Cog.listener()
     async def on_webhooks_update(self, channel: discord.TextChannel) -> None:

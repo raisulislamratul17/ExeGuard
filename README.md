@@ -39,9 +39,23 @@ Monitors audit logs for destructive actions:
 
 **Response:** Automatically bans the offender, strips their roles, and notifies the server owner.
 
+### Fun & Games
+Interactive entertainment for your community:
+- **Classic Games** — RPS, Tic-Tac-Toe, Wordle, 2048, Connect Four, Chess
+- **Casino Games** — Blackjack, Slots (with animated GIF generation)
+- **Social Commands** — Hug, slap, pat, meme, howgay, tharki
+- **AI Tools** — AI Image generation (Imagine)
+
+### Utility & Automation
+- **AFK System** — Notifies mentions and welcomes you back with a summary
+- **AutoRole** — Automatically assign roles to new members
+- **Welcome System** — Customizable welcome messages in dedicated channels
+- **Giveaways** — Host and manage giveaways (coming soon)
+
 ### AutoMod
 - **Webhook protection** — deletes unauthorized webhooks
 - **@everyone/@here protection** — detects abuse and auto-timeouts the user
+- **Emoji Spam** — prevents excessive emoji usage
 
 ### Member Verification
 Gate new members before they access the server:
