@@ -1,7 +1,6 @@
 """Games cog for ExeGuard.
 
-Merged from Olympus-Bot. Provides interactive games like RPS, 
-Tic-Tac-Toe, Wordle, 2048, and Chess.
+Provides interactive games like RPS, Tic-Tac-Toe, Wordle, 2048, and Chess.
 """
 
 from __future__ import annotations

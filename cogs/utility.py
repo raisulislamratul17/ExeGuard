@@ -1,7 +1,6 @@
 """Utility cog for ExeGuard.
 
-Merged from Olympus-Bot. Provides utility features like AFK, 
-AutoRole, Welcome messages, and Giveaways.
+Provides utility features like AFK, AutoRole, Welcome messages, and Giveaways.
 """
 
 from __future__ import annotations

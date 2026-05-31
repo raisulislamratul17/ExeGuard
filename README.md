@@ -8,6 +8,14 @@ ExeGuard is a powerful, all-in-one Discord security bot that protects your serve
 
 ## Features
 
+### AutoMod & Advanced Protection
+- **External App Blocking** — Detects unauthorized user-installed apps and external bots.
+  - **1st Offense:** Automatic 15-minute timeout.
+  - **Repeat Offense:** Automatic ban.
+- **Webhook protection** — Deletes unauthorized webhooks.
+- **@everyone/@here protection** — Detects abuse and auto-timeouts the user.
+- **Emoji Spam** — Prevents excessive emoji usage.
+
 ### Anti-Spam Protection
 Automatically detects and punishes:
 - **Rapid messaging** — flooding the chat with messages
@@ -52,10 +60,24 @@ Interactive entertainment for your community:
 - **Welcome System** — Customizable welcome messages in dedicated channels
 - **Giveaways** — Host and manage giveaways (coming soon)
 
-### AutoMod
-- **Webhook protection** — deletes unauthorized webhooks
-- **@everyone/@here protection** — detects abuse and auto-timeouts the user
-- **Emoji Spam** — prevents excessive emoji usage
+### Deployment
+#### Render (Recommended)
+1. Create a new **Web Service** on Render.
+2. Connect your repository.
+3. Select **Python** as the environment.
+4. Set the **Start Command** to `python main.py`.
+5. Add the following **Environment Variables**:
+   - `DISCORD_TOKEN`: Your bot token.
+   - `PORT`: `8080` (Render will override this, but it's good to have).
+   - `DATABASE_PATH`: `data/exeguard.db`.
+   - `OWNER_IDS`: Your Discord ID.
+6. (Optional) Attach a **Disk** to `/data` if you want persistent storage across restarts.
+
+#### Local Development
+```powershell
+pip install -r requirements.txt
+python main.py
+```
 
 ### Member Verification
 Gate new members before they access the server:

@@ -16,6 +16,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from utils.embed_builder import EmbedBuilder
+from utils.permissions import MEMBER_PERMISSIONS, STAFF_PERMISSIONS, DANGEROUS_PERMISSIONS
 
 
 def parse_duration(duration_str: str) -> int | None:
@@ -767,6 +768,62 @@ class Moderation(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    # ── Role Security ───────────────────────────────────────────────
+
+    @app_commands.command(name="sanitize_role", description="Clean a role by applying a safety template")
+    @app_commands.describe(role="The role to clean", template="Safety template (staff, member, clear)")
+    @app_commands.checks.has_permissions(manage_roles=True)
+    async def sanitize_role(self, interaction: discord.Interaction, role: discord.Role, template: str) -> None:
+        if role >= interaction.guild.me.top_role:
+            await interaction.response.send_message("I cannot manage roles higher than mine!", ephemeral=True)
+            return
+        
+        template = template.lower()
+        new_perms = discord.Permissions.none()
+        
+        if template == "staff":
+            new_perms.update(**STAFF_PERMISSIONS)
+        elif template == "member":
+            new_perms.update(**MEMBER_PERMISSIONS)
+        elif template == "clear":
+            new_perms = discord.Permissions.none()
+        else:
+            await interaction.response.send_message("Invalid template! Use `staff`, `member`, or `clear`.", ephemeral=True)
+            return
+
+        try:
+            await role.edit(permissions=new_perms, reason=f"ExeGuard: Role Sanitization ({template})")
+            embed = EmbedBuilder.success("Role Sanitized", f"Applied `{template}` template to {role.mention}.\nDangerous permissions have been removed.")
+            await interaction.response.send_message(embed=embed)
+        except discord.Forbidden:
+            await interaction.response.send_message("I don't have permission to edit this role!", ephemeral=True)
+
+    @app_commands.command(name="secure_everyone", description="Harden the @everyone role permissions")
+    @app_commands.checks.has_permissions(manage_roles=True)
+    async def secure_everyone(self, interaction: discord.Interaction) -> None:
+        role = interaction.guild.default_role
+        perms = role.permissions
+        
+        # Strip dangerous perms from @everyone
+        to_strip = {
+            "mention_everyone": False,
+            "manage_messages": False,
+            "manage_roles": False,
+            "manage_channels": False,
+            "manage_webhooks": False,
+            "administrator": False,
+            "manage_guild": False,
+            "create_public_threads": False,
+            "create_private_threads": False,
+        }
+        perms.update(**to_strip)
+        
+        try:
+            await role.edit(permissions=perms, reason="ExeGuard: @everyone hardening")
+            embed = EmbedBuilder.success("@everyone Hardened", "Dangerous permissions (Mention Everyone, Manage Messages, Administrator, etc.) have been stripped from @everyone.")
+            await interaction.response.send_message(embed=embed)
+        except discord.Forbidden:
+            await interaction.response.send_message("I don't have permission to edit @everyone!", ephemeral=True)
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Moderation(bot))

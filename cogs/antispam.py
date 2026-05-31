@@ -44,7 +44,7 @@ class AntiSpam(commands.Cog):
     """Real-time anti-spam protection."""
 
     CLEANUP_INTERVAL = 300  # 5 minutes
-    MESSAGE_TTL = 600  # 10 minutes max retention
+    MESSAGE_TTL = 1800  # 30 minutes retention (covers 15m timeout)
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -235,23 +235,28 @@ class AntiSpam(commands.Cog):
     # ── Listener ────────────────────────────────────────────────────
 
     def _is_external_app(self, message: discord.Message) -> tuple[bool, discord.User | discord.Member | None]:
+        # 1. Ignore normal users and verified webhooks
         if not message.author.bot or message.webhook_id is not None:
             return False, None
 
-        # 1. Primary check: Use Discord's official interaction metadata if available
+        # 2. Check if it's a "User App" (External Integration)
+        # Using interaction_metadata (preferred for new Discord API)
         if hasattr(message, "interaction_metadata") and message.interaction_metadata:
             metadata = message.interaction_metadata
             # If it's explicitly a user-installed integration, it is an external app
             if metadata.is_user_integration():
                 return True, metadata.user
 
-        # 2. Fallback check: If the bot is not a member of the guild, it must be an external app
+        # 3. Check if the bot is NOT in the server (External Bot)
+        # If get_member returns None, it means the bot is not in the guild member list
         if message.guild.get_member(message.author.id) is None:
             trigger_user = None
             if message.interaction:
                 trigger_user = message.interaction.user
             elif hasattr(message, "interaction_metadata") and message.interaction_metadata:
                 trigger_user = message.interaction_metadata.user
+            
+            # This covers "External bots that are not added in server but still can spam"
             return True, trigger_user
 
         return False, None
@@ -267,8 +272,7 @@ class AntiSpam(commands.Cog):
 
         db = self.bot.db  # type: ignore[attr-defined]
         settings = await db.get_guild_settings(message.guild.id)
-        timeout_secs = settings.get("timeout_duration", 300)
-
+        
         action = "none"
         guild_member = None
 
@@ -284,23 +288,24 @@ class AntiSpam(commands.Cog):
             data = self._guild_data(message.guild.id, guild_member.id)
             data.infractions += 1
 
-            if data.infractions >= 3:
+            if data.infractions >= 2:
                 try:
-                    await guild_member.ban(reason="ExeGuard: Spammed via external User App")
+                    await guild_member.ban(reason="ExeGuard: Repeated external app/bot abuse")
                 except discord.HTTPException:
                     pass
                 action = "banned"
-            elif data.infractions >= 2:
+            else:
                 try:
+                    # 15 minutes timeout = 900 seconds
                     await guild_member.timeout(
-                        timedelta(seconds=timeout_secs),
-                        reason="ExeGuard: External App spam abuse",
+                        timedelta(minutes=15),
+                        reason="ExeGuard: Unauthorized external app usage (15m timeout)",
                     )
                 except discord.HTTPException:
                     pass
-                action = f"timed out for {timeout_secs}s"
-            else:
-                action = "warned"
+                action = "timed out (15m)"
+        elif not guild_member:
+            action = "blocked (user not in server)"
 
         user_mention = guild_member.mention if guild_member else (trigger_user.mention if trigger_user else "Unknown User")
         app_mention = message.author.mention if message.author else "Unknown App"

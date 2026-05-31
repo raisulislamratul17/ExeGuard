@@ -259,6 +259,24 @@ class AntiNuke(commands.Cog):
     async def on_guild_role_update(
         self, before: discord.Role, after: discord.Role
     ) -> None:
+        guild = after.guild
+        # 1. Protected Role Monitor (SENTINELS/Founder)
+        protected_names = ["sentinels", "founder"]
+        if after.name.lower() in protected_names:
+            user = await self._get_recent_auditor(guild, discord.AuditLogAction.role_update)
+            if user and user.id != guild.owner_id:
+                # Revert immediately
+                try:
+                    await after.edit(permissions=before.permissions, name=before.name, color=before.color, reason="ExeGuard: Protected role modified by non-owner")
+                    # Ban the offender
+                    member = guild.get_member(user.id)
+                    if member:
+                        await member.ban(reason=f"ExeGuard: Unauthorized modification of protected role @{after.name}")
+                except discord.Forbidden:
+                    pass
+                return
+
+        # 2. General Permission Escalation Detection
         dangerous = (
             discord.Permissions.administrator,
             discord.Permissions(ban_members=True),

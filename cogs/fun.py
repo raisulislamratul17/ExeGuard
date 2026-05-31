@@ -1,7 +1,6 @@
 """Fun cog for ExeGuard.
 
-Merged from Olympus-Bot. Provides entertainment commands like 
-howgay, tharki, slap, hug, and more.
+Provides entertainment commands like howgay, tharki, slap, hug, and more.
 """
 
 from __future__ import annotations

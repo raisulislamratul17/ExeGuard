@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: exeguard
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: DATABASE_PATH
+        value: data/exeguard.db
+      - key: BOT_PREFIX
+        value: "!"
+      - key: DISCORD_TOKEN
+        sync: false # User must set this in Render dashboard
+      - key: OWNER_IDS
+        sync: false # User must set this in Render dashboard

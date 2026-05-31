@@ -45,11 +45,12 @@ async def _run_webserver(port: int) -> None:
 
     app.router.add_get("/", handle)
     app.router.add_get("/health", handle_health)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    log.info("Web server running on port %d", port)
+    log.info("Web server listening on 0.0.0.0:%d", port)
 
 
 class ExeGuard(commands.Bot):
