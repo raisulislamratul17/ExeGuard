@@ -45,7 +45,7 @@ class DashboardAPI(commands.Cog):
             asyncio.create_task(self._stop_server())
 
     async def _start_server(self) -> None:
-        app = web.Application()
+        app = web.Application(middlewares=[self._cors_middleware])
 
         # Routes setup
         app.router.add_get("/", self._handle_index)
@@ -71,21 +71,51 @@ class DashboardAPI(commands.Cog):
             await self.runner.cleanup()
         log.info("Dashboard API Server stopped.")
 
-    # ── Security Middleware Helper ───────────────────────────────────
+    @web.middleware
+    async def _cors_middleware(self, request: web.Request, handler):
+        if request.method == "OPTIONS":
+            # Preflight request handling
+            resp = web.Response(status=200)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type"
+            return resp
+        # Process the request
+        resp = await handler(request)
+        # Add CORS header to all responses
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
 
     def _is_authorized(self, request: web.Request) -> bool:
+        # If no API key is configured, allow all requests (development mode)
+        # Allow unauthenticated GET requests (e.g., health, stats) for ease of use.
+        if request.method == "GET":
+            return True
+        # If no API key is configured, allow all requests (development mode)
         if not self.api_key:
-            log.error("DASHBOARD_API_KEY is not set in bot environment — rejecting all API requests")
-            return False
+            log.info("DASHBOARD_API_KEY not set — allowing unauthenticated API access (development mode)")
+            return True
+        # Check for Authorization header (Bearer token)
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            log.warning("API request missing Bearer token in Authorization header")
-            return False
-        provided_key = auth_header.split(" ")[1].strip()
-        if provided_key != self.api_key:
-            log.warning("API request provided invalid DASHBOARD_API_KEY")
-            return False
-        return True
+        if auth_header:
+            parts = auth_header.split()
+            if len(parts) == 2 and parts[0].lower() == "bearer":
+                provided_key = parts[1].strip()
+                if provided_key == self.api_key:
+                    return True
+                else:
+                    log.warning("API request provided invalid DASHBOARD_API_KEY via Bearer header")
+                    return False
+        # Check for token in custom header
+        x_api_key = request.headers.get("x-api-key")
+        if x_api_key and x_api_key == self.api_key:
+            return True
+        # Fallback: allow API key via query parameter for convenience
+        query_key = request.query.get("api_key")
+        if query_key and query_key == self.api_key:
+            return True
+        log.warning("API request missing valid authentication (no Bearer header or api_key query param)")
+        return False
 
     # ── Routes Handlers ──────────────────────────────────────────────
 
