@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]/route";
 
-const BOT_API_URL = process.env.DISCORD_BOT_API_URL || "http://localhost:8080";
+const BOT_API_URL = (process.env.DISCORD_BOT_API_URL || "http://localhost:8080").replace(/\/+$/, "");
 const DASHBOARD_API_KEY = process.env.DASHBOARD_API_KEY || "";
 
 // Helper to check user guild permissions via Discord API

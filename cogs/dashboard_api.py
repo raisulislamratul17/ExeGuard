@@ -300,6 +300,19 @@ class DashboardAPI(commands.Cog):
             except discord.HTTPException:
                 return web.json_response({"error": "Member not found in this guild"}, status=404)
 
+        # Staff-only moderation protection: only allow targeting members with kick/ban perms
+        if action in ("kick", "ban", "timeout"):
+            has_staff_perms = (
+                member.guild_permissions.administrator
+                or member.guild_permissions.ban_members
+                or member.guild_permissions.kick_members
+                or member.guild_permissions.moderate_members
+            )
+            if not has_staff_perms:
+                return web.json_response({
+                    "error": "Dashboard moderation can only target members with moderation permissions (Kick Members, Ban Members, or Administrator). Regular members are protected from dashboard actions."
+                }, status=403)
+
         try:
             if action == "kick":
                 await member.kick(reason=reason)
