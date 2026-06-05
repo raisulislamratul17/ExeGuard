@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     // Filter user guilds where they have MANAGE_GUILD (0x20) or ADMINISTRATOR (0x8) permissions
     const managedGuilds = userGuilds.filter((g: any) => {
       const perms = BigInt(g.permissions);
-      return (perms & 0x20n) === 0x20n || (perms & 0x8n) === 0x8n;
+      return (perms & BigInt(0x20)) === BigInt(0x20) || (perms & BigInt(0x8)) === BigInt(0x8);
     });
 
     // 2. Fetch bot's guilds from Render Bot API

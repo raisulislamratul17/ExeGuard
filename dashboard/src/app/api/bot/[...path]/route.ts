@@ -22,8 +22,8 @@ async function hasGuildPermission(accessToken: string, guildId: string): Promise
 
     // Check MANAGE_GUILD (0x20) or ADMINISTRATOR (0x8) permission
     const permissions = BigInt(targetGuild.permissions);
-    const hasManageGuild = (permissions & 0x20n) === 0x20n;
-    const hasAdmin = (permissions & 0x8n) === 0x8n;
+    const hasManageGuild = (permissions & BigInt(0x20)) === BigInt(0x20);
+    const hasAdmin = (permissions & BigInt(0x8)) === BigInt(0x8);
     
     return hasManageGuild || hasAdmin;
   } catch (error) {
