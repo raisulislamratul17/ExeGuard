@@ -21,9 +21,9 @@ async function hasGuildPermission(accessToken: string, guildId: string): Promise
     if (!targetGuild) return false;
 
     // Check MANAGE_GUILD (0x20) or ADMINISTRATOR (0x8) permission
-    const permissions = parseInt(targetGuild.permissions);
-    const hasManageGuild = (permissions & 0x20) === 0x20;
-    const hasAdmin = (permissions & 0x8) === 0x8;
+    const permissions = BigInt(targetGuild.permissions);
+    const hasManageGuild = (permissions & 0x20n) === 0x20n;
+    const hasAdmin = (permissions & 0x8n) === 0x8n;
     
     return hasManageGuild || hasAdmin;
   } catch (error) {
@@ -38,8 +38,8 @@ export async function GET(
 ) {
   const { path } = await params;
   const session = await getServerSession(authOptions) as any;
-  if (!session || !session.accessToken) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session?.accessToken) {
+    return NextResponse.json({ error: "Unauthorized: No Discord access token" }, { status: 401 });
   }
 
   const subPath = path.join("/");
@@ -89,8 +89,8 @@ export async function POST(
 ) {
   const { path } = await params;
   const session = await getServerSession(authOptions) as any;
-  if (!session || !session.accessToken) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session?.accessToken) {
+    return NextResponse.json({ error: "Unauthorized: No Discord access token" }, { status: 401 });
   }
 
   const subPath = path.join("/");

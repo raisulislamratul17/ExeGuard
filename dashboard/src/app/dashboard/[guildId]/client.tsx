@@ -65,8 +65,8 @@ export default function GuildSettingsClient({ guildId }: { guildId: string }) {
       setLoading(true);
       const settingsRes = await fetch(`/api/bot/guilds/${guildId}/settings`);
       if (!settingsRes.ok) {
-        if (settingsRes.status === 404) throw new Error("Bot is not in this server. Please invite ExeGuard first!");
-        throw new Error("Failed to load server settings.");
+        const errData = await settingsRes.json().catch(() => ({}));
+        throw new Error(errData.error || `Failed to load server settings (${settingsRes.status})`);
       }
       setSettings(await settingsRes.json());
 
