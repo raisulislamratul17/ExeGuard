@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   title: "ExeGuard | Futuristic Discord Server Protection",
   description: "Secure your Discord server with state-of-the-art anti-nuke, anti-raid, and advanced automod configurations.",
   icons: {
-    icon: "/favicon.ico",
+    icon: "/logo.jpg",
   }
 };
 

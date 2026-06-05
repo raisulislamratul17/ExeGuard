@@ -35,9 +35,7 @@ export default function Home() {
 
       <nav className="nav" style={{ background: "var(--canvas)", position: "relative", zIndex: 20 }}>
         <div className="flex items-center gap-sm">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--ink)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-          </svg>
+          <img src="/logo.jpg" alt="ExeGuard" style={{ width: "28px", height: "28px", borderRadius: "6px" }} />
           <span style={{ fontSize: "18px", fontWeight: 600, letterSpacing: "-0.5px" }}>ExeGuard</span>
         </div>
 
