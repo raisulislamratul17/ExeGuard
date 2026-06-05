@@ -163,6 +163,17 @@ DASHBOARD_API_KEY=your_secret_api_key
 PORT=8080
 ```
 
+### Dashboard Environment Variables
+The dashboard requires the following variables in its environment (e.g., on Vercel):
+```env
+NEXT_PUBLIC_DISCORD_CLIENT_ID=your_discord_client_id
+DISCORD_CLIENT_SECRET=your_discord_client_secret
+NEXTAUTH_SECRET=a_random_secret_string
+NEXTAUTH_URL=your_dashboard_url (e.g., https://exeguard.vercel.app)
+DISCORD_BOT_API_URL=your_bot_api_url (e.g., https://your-bot.render.com)
+DASHBOARD_API_KEY=your_secret_api_key (must match bot's DASHBOARD_API_KEY)
+```
+
 ### Discord Setup
 Invite the bot with required permissions, then run:
 ```
