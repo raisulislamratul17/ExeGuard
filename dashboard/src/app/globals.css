@@ -426,6 +426,7 @@ select.input {
 .flex-col { flex-direction: column; }
 .items-center { align-items: center; }
 .justify-between { justify-content: space-between; }
+.justify-center { justify-content: center; }
 .gap-xs { gap: 4px; }
 .gap-sm { gap: 8px; }
 .gap-md { gap: 16px; }
