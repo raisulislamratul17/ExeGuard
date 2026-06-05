@@ -15,3 +15,5 @@ services:
         sync: false # User must set this in Render dashboard
       - key: OWNER_IDS
         sync: false # User must set this in Render dashboard
+      - key: DASHBOARD_API_KEY
+        sync: false # Must match the DASHBOARD_API_KEY in Vercel env vars
