@@ -55,6 +55,7 @@ export async function GET(
 
   try {
     const targetUrl = `${BOT_API_URL}/api/${subPath}`;
+    console.log(`Proxying GET request to Bot API: ${targetUrl}`);
     const response = await fetch(targetUrl, {
       method: "GET",
       headers: {
@@ -64,14 +65,21 @@ export async function GET(
     });
 
     if (!response.ok) {
-      const errBody = await response.json().catch(() => ({}));
-      return NextResponse.json(errBody || { error: "Failed to fetch from Bot API" }, { status: response.status });
+      const errorText = await response.text();
+      console.error(`Bot API error (${response.status}): ${errorText}`);
+      try {
+        const errBody = JSON.parse(errorText);
+        return NextResponse.json(errBody, { status: response.status });
+      } catch {
+        return NextResponse.json({ error: `Bot API returned ${response.status}: ${errorText}` }, { status: response.status });
+      }
     }
 
     const data = await response.json();
     return NextResponse.json(data);
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Bot API Connection Refused" }, { status: 500 });
+    console.error(`Bot API connection error: ${err.message}`);
+    return NextResponse.json({ error: `Connection Refused: Could not reach Bot API at ${BOT_API_URL}. Ensure your bot is running and DISCORD_BOT_API_URL is correct.` }, { status: 500 });
   }
 }
 

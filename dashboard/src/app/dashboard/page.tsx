@@ -10,6 +10,7 @@ interface Guild {
   name: string;
   icon_url: string | null;
   bot_in: boolean;
+  bot_api_error?: string;
   invite_url: string;
 }
 
@@ -88,6 +89,26 @@ export default function Dashboard() {
         {error && (
           <div className="cyber-card" style={{ borderColor: "hsl(var(--danger))", color: "hsl(var(--danger))", padding: "1rem", marginBottom: "2rem" }}>
             <strong>Error:</strong> {error}
+          </div>
+        )}
+
+        {guilds.length > 0 && guilds[0].bot_api_error && (
+          <div className="cyber-card" style={{ borderColor: "hsl(var(--warning))", background: "rgba(255, 165, 0, 0.05)", padding: "1rem", marginBottom: "2rem", fontSize: "0.9rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "hsl(var(--warning))", marginBottom: "0.5rem" }}>
+              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <strong>Bot Connection Issue</strong>
+            </div>
+            <p style={{ color: "hsl(var(--text-secondary))" }}>
+              The dashboard is having trouble reaching your Bot API. This is why servers might appear as "Missing".
+            </p>
+            <code style={{ display: "block", marginTop: "0.5rem", padding: "0.5rem", background: "rgba(0,0,0,0.3)", borderRadius: "4px", fontSize: "0.8rem", wordBreak: "break-all" }}>
+              {guilds[0].bot_api_error}
+            </code>
+            <p style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+              Check your <strong>DISCORD_BOT_API_URL</strong> and <strong>DASHBOARD_API_KEY</strong> environment variables in Vercel.
+            </p>
           </div>
         )}
 

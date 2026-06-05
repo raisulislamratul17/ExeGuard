@@ -75,13 +75,17 @@ class DashboardAPI(commands.Cog):
 
     def _is_authorized(self, request: web.Request) -> bool:
         if not self.api_key:
-            log.error("DASHBOARD_API_KEY is not set — rejecting all API requests")
+            log.error("DASHBOARD_API_KEY is not set in bot environment — rejecting all API requests")
             return False
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
+            log.warning("API request missing Bearer token in Authorization header")
             return False
         provided_key = auth_header.split(" ")[1].strip()
-        return provided_key == self.api_key
+        if provided_key != self.api_key:
+            log.warning("API request provided invalid DASHBOARD_API_KEY")
+            return False
+        return True
 
     # ── Routes Handlers ──────────────────────────────────────────────
 
@@ -100,7 +104,7 @@ class DashboardAPI(commands.Cog):
 
     async def _handle_stats(self, request: web.Request) -> web.Response:
         if not self._is_authorized(request):
-            return web.json_response({"error": "Unauthorized"}, status=401)
+            return web.json_response({"error": "Unauthorized: Invalid or missing DASHBOARD_API_KEY"}, status=401)
 
         uptime_seconds = (datetime.now(timezone.utc) - self.start_time).total_seconds()
         stats = {
@@ -115,7 +119,7 @@ class DashboardAPI(commands.Cog):
 
     async def _handle_guilds(self, request: web.Request) -> web.Response:
         if not self._is_authorized(request):
-            return web.json_response({"error": "Unauthorized"}, status=401)
+            return web.json_response({"error": "Unauthorized: Invalid or missing DASHBOARD_API_KEY"}, status=401)
 
         guilds = []
         for guild in self.bot.guilds:

@@ -33,17 +33,27 @@ export async function GET(req: NextRequest) {
 
     // 2. Fetch bot's guilds from Render Bot API
     let botGuilds: any[] = [];
+    let botApiError = "";
     try {
+      console.log(`Fetching bot guilds from: ${BOT_API_URL}/api/guilds`);
       const botGuildsRes = await fetch(`${BOT_API_URL}/api/guilds`, {
         headers: {
           Authorization: `Bearer ${DASHBOARD_API_KEY}`,
         },
+        cache: 'no-store'
       });
+      
       if (botGuildsRes.ok) {
         botGuilds = await botGuildsRes.json();
+        console.log(`Successfully fetched ${botGuilds.length} guilds from bot API`);
+      } else {
+        const errorText = await botGuildsRes.text();
+        botApiError = `Bot API returned ${botGuildsRes.status}: ${errorText}`;
+        console.error(botApiError);
       }
-    } catch (err) {
-      console.error("Bot API offline or refused:", err);
+    } catch (err: any) {
+      botApiError = `Failed to connect to Bot API at ${BOT_API_URL}: ${err.message}`;
+      console.error(botApiError);
     }
 
     // 3. Map user guilds and cross-reference bot presence
@@ -58,6 +68,7 @@ export async function GET(req: NextRequest) {
         name: ug.name,
         icon_url: iconUrl,
         bot_in: botInGuild,
+        bot_api_error: botApiError, // Pass error to frontend for debugging
         invite_url: `https://discord.com/api/oauth2/authorize?client_id=${process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID}&permissions=8&scope=bot%20applications.commands&guild_id=${ug.id}&disable_guild_select=true`
       };
     });
