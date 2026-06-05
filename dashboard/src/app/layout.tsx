@@ -19,7 +19,6 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <Providers>
-          <div className="glow-spot-2"></div>
           {children}
         </Providers>
       </body>
