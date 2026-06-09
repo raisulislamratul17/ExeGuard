@@ -33,7 +33,6 @@ ExeGuard is a next-gen **autonomous security bot** for Discord. It combines real
 🔒  Anti-Raid     →  Detects storms, locks down, auto-recovers
 👮  Moderation    →  Ban, kick, timeout, warn, purge, tempban, voice mod
 🧩  Verification  →  Button or captcha gate for new members
-🎮  Games         →  Blackjack, slots, chess, wordle, 2048 & more
 🏗️  Infrastructure →  Tickets, giveaways, dynamic VC, reaction roles
 ```
 
@@ -80,16 +79,6 @@ Watches audit logs for destructive action bursts (3+ within 10s):
 - External app monitoring
 
 **Response:** Auto-bans the offender, strips roles, DMs the server owner.
-
----
-
-## 🎮 Games & Fun
-
-| Category | Games |
-|----------|-------|
-| **Classic** | Rock Paper Scissors, Tic-Tac-Toe, Wordle, 2048, Connect Four, Chess, Battleship |
-| **Casino** | Blackjack (with card images), Slots (animated GIF) |
-| **Social** | `hug`, `slap`, `pat`, `meme`, `howgay`, `tharki` |
 
 ---
 
@@ -224,13 +213,10 @@ ExeGuard
 │   ├── analytics.py     # Server stats, growth, voice activity
 │   ├── infrastructure.py# Tickets, giveaways, VC, reaction/button/dropdown roles
 │   ├── server_mgmt.py   # Ownership, rolefix, security, bypass, community
-│   ├── games.py         # Game commands & blackjack engine
-│   ├── fun.py           # Social & entertainment commands
 │   └── utility.py       # AFK, autorole, welcome messages, onboarding
-├── games/               # Vendored discord_games library
 ├── utils/               # Embed builder, permission helpers
 ├── prodia/              # Prodia API constants
-└── data/                # Runtime assets (cards, pictures)
+└── data/                # Runtime assets
 ```
 
 ---
@@ -245,7 +231,7 @@ ExeGuard
 | **Framework** | [discord.py](https://github.com/Rapptz/discord.py) 2.3+ |
 | **Database** | aiosqlite (async SQLite) |
 | **API Server** | aiohttp |
-| **Assets** | Pillow (card images, slot GIFs, 2048 render) |
+
 
 </div>
 
