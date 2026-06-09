@@ -27,7 +27,10 @@ COGS: list[str] = [
     "cogs.verification",
     "cogs.logging_cog",
     "cogs.automod",
-    "cogs.dashboard_api",
+    "cogs.utility",
+    "cogs.server_mgmt",
+    "cogs.infrastructure",
+    "cogs.analytics",
 ]
 
 

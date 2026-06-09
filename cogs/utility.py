@@ -86,6 +86,25 @@ class Utility(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
         db = self.bot.db # type: ignore
+        settings = await db.get_guild_settings(member.guild.id)
+        
+        # Safe Onboarding enforcement
+        if settings.get("safe_onboarding", 1) and not member.bot:
+            from datetime import datetime, timedelta, timezone
+            age = datetime.now(timezone.utc) - member.created_at
+            if age < timedelta(days=1):
+                try:
+                    await member.kick(reason="ExeGuard: Safe onboarding — account too new")
+                    return
+                except discord.HTTPException:
+                    pass
+            suspicious = ["raid", "nuke", "hack", "free nitro"]
+            if any(frag in member.name.lower() for frag in suspicious):
+                try:
+                    await member.kick(reason="ExeGuard: Safe onboarding — suspicious name")
+                    return
+                except discord.HTTPException:
+                    pass
         
         # AutoRole
         roles_ids = await db.get_auto_roles(member.guild.id)
@@ -140,6 +159,60 @@ class Utility(commands.Cog):
         await db.set_welcome_settings(interaction.guild.id, channel.id, message, int(enabled)) # type: ignore
         status = "enabled" if enabled else "disabled"
         await interaction.response.send_message(f"Welcome messages {status} in {channel.mention}.", ephemeral=True)
+
+    @app_commands.command(name="help", description="Get help with ExeGuard commands")
+    @app_commands.describe(category="The category to get help for")
+    async def help_cmd(self, interaction: discord.Interaction, category: Optional[str] = None) -> None:
+        categories = {
+            "sec": (
+                "**ExeGuard Security Help**\n\n"
+                "**Security:** Anti-Nuke, Anti-Dangerous Invites, Safe Onboarding\n"
+                "**Moderation:** Punishments, Voice Moderation, Logs\n"
+                "**AutoMod:** Message filters, NSFW filter, Bad words\n"
+                "**Ownership:** Extra owner management, Transfer\n"
+                "**Analytics:** Server stats, Growth tracking, Voice activity\n"
+                "**Utilities:** AFK, AutoRole, Welcome/Leave messages\n"
+                "**Infrastructure:** Tickets, Giveaways, VoiceMaster, Reaction/Button/Dropdown Roles\n"
+                "**Recovery:** Panic mode\n"
+                "**Configuration:** /setup, /settings, /logs"
+            ),
+            "mod": (
+                "**ExeGuard Moderation Help**\n\n"
+                "**Punishments:** `/ban`, `/tempban`, `/kick`, `/timeout`, `/warn`, `/softban`, `/unban`\n"
+                "**Message:** `/purge`, `/snipe`, `/editsnipe`\n"
+                "**Users:** `/nickname`, `/userinfo`, `/avatar`, `/banner`, `/history`, `/infractions`\n"
+                "**Voice:** `/voicemute`, `/voiceunmute`, `/voicedisconnect`, `/voicemove`, `/voicelock`, `/voiceunlock`\n"
+                "**Channels:** `/lock`, `/unlock`\n"
+                "**Security:** `/panic`, `/health`, `/secure_everyone`, `/security scan`"
+            ),
+            "infra": (
+                "**ExeGuard Infrastructure Help**\n\n"
+                "**Tickets:** `/new`, `/close`\n"
+                "**Giveaways:** `/giveaway`, `/giveaway_end`, `/giveaway_reroll`\n"
+                "**VoiceMaster:** `/voicemaster`\n"
+                "**Roles:** `/reactionrole`, `/buttonrole`, `/dropdownrole`\n"
+                "**Welcome:** `/welcome`, `/leave`\n"
+                "**Utility:** `/autorole`, `/afk`"
+            ),
+        }
+
+        key = category.lower() if category else None
+        if key in categories:
+            embed = EmbedBuilder.info("ExeGuard Help", categories[key])
+            await interaction.response.send_message(embed=embed)
+            return
+
+        embed = EmbedBuilder.info(
+            "ExeGuard Help",
+            "**Available categories:**\n"
+            "`sec` — Security, Moderation, AutoMod, Ownership\n"
+            "`mod` — All moderation commands\n"
+            "`infra` — Tickets, Giveaways, Roles, Welcome\n\n"
+            "Use `/help category:sec` for detailed info.\n"
+            "Use `/stats` for analytics.\n"
+            "Use `/panic` for emergency lockdown.",
+        )
+        await interaction.response.send_message(embed=embed)
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Utility(bot))

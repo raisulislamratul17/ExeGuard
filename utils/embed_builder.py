@@ -11,6 +11,8 @@ from config import (
     COLOR_INFO,
     COLOR_PRIMARY,
     COLOR_SUCCESS,
+    COLOR_SECONDARY,
+    COLOR_TEXT,
     EMBED_FOOTER,
 )
 
@@ -24,9 +26,9 @@ class EmbedBuilder:
         description: str,
         color: int,
     ) -> discord.Embed:
+        # Terminal-inspired: Minimalistic, often using monochrome or primary colors
         embed = discord.Embed(
-            title=title,
-            description=description,
+            description=f"**{title}**\n\n{description}",
             color=color,
             timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
@@ -35,24 +37,26 @@ class EmbedBuilder:
 
     @classmethod
     def info(cls, title: str, description: str) -> discord.Embed:
-        return cls._base(f"\U0001f6e1\ufe0f {title}", description, COLOR_INFO)
+        return cls._base(title, description, COLOR_INFO)
 
     @classmethod
     def success(cls, title: str, description: str) -> discord.Embed:
-        return cls._base(f"\u2705 {title}", description, COLOR_SUCCESS)
+        return cls._base(title, description, COLOR_SUCCESS)
 
     @classmethod
     def warning(cls, title: str, description: str) -> discord.Embed:
-        return cls._base(f"\u26a0\ufe0f {title}", description, COLOR_PRIMARY)
+        return cls._base(title, description, COLOR_PRIMARY)
 
     @classmethod
     def error(cls, title: str, description: str) -> discord.Embed:
-        return cls._base(f"\u274c {title}", description, COLOR_DANGER)
+        return cls._base(title, description, COLOR_DANGER)
 
     @classmethod
     def security(cls, title: str, description: str) -> discord.Embed:
-        return cls._base(f"\U0001f6a8 {title}", description, COLOR_DANGER)
+        # "Thick red left-side indicator bar for security logs"
+        # In Discord, this is the color strip on the left.
+        return cls._base(title, description, COLOR_DANGER)
 
     @classmethod
     def log(cls, title: str, description: str) -> discord.Embed:
-        return cls._base(f"\U0001f4cb {title}", description, COLOR_PRIMARY)
+        return cls._base(title, description, COLOR_SECONDARY)

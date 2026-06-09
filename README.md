@@ -25,16 +25,16 @@
 
 ## ⚡ Overview
 
-ExeGuard is a next-gen **autonomous security bot** for Discord. It combines real-time threat detection, automated moderation, raid/nuke countermeasures, and a full-featured web dashboard — all controllable through slash commands. Whether you're running a small community or a large gaming server, ExeGuard **keeps the peace**.
+ExeGuard is a next-gen **autonomous security bot** for Discord. It combines real-time threat detection, automated moderation, and full raid/nuke countermeasures — all controllable through slash commands. Whether you're running a small community or a large gaming server, ExeGuard **keeps the peace**.
 
 ```
 🛡️  Anti-Nuke     →  Blocks mass deletions, bans, role nukes
 🚫  Anti-Spam     →  Kills floods, dupes, mentions, caps, links
 🔒  Anti-Raid     →  Detects storms, locks down, auto-recovers
-👮  Moderation    →  Ban, kick, timeout, warn, purge, tempban
+👮  Moderation    →  Ban, kick, timeout, warn, purge, tempban, voice mod
 🧩  Verification  →  Button or captcha gate for new members
 🎮  Games         →  Blackjack, slots, chess, wordle, 2048 & more
-📊  Dashboard     →  Web UI with live stats, settings, mod center
+🏗️  Infrastructure →  Tickets, giveaways, dynamic VC, reaction roles
 ```
 
 ---
@@ -48,6 +48,9 @@ ExeGuard is a next-gen **autonomous security bot** for Discord. It combines real
 | **Webhook Protection** | Auto-deletes webhooks created by untrusted users |
 | **@everyone/@here Guard** | Detects abuse & instantly times out the offender |
 | **Emoji Spam Filter** | Prevents mass emoji flooding |
+| **NSFW Filter** | Blocks NSFW content in messages |
+| **Ghost Ping Detection** | Logs deleted ping messages |
+| **Scam / Phishing Detection** | Regex-based malicious content blocking |
 
 ### 🚫 Anti-Spam
 ```
@@ -65,6 +68,7 @@ ExeGuard is a next-gen **autonomous security bot** for Discord. It combines real
 - **Mass join detection** — auto-lockdown when threshold is breached
 - **Young account filter** — kicks accounts < 7 days old
 - **Suspicious name detection** — pattern-matches raid/nuke/hack keywords
+- **Safe onboarding** — protects new servers from fresh accounts
 - **Auto-recovery** — lifts lockdown after 5 minutes
 
 ### ⚔️ Anti-Nuke
@@ -73,6 +77,7 @@ Watches audit logs for destructive action bursts (3+ within 10s):
 - Mass bans & kicks
 - Permission escalation on roles
 - Webhook / integration creation
+- External app monitoring
 
 **Response:** Auto-bans the offender, strips roles, DMs the server owner.
 
@@ -96,6 +101,7 @@ Watches audit logs for destructive action bursts (3+ within 10s):
 | `/setup` — Quick wizard (logs, verified role, toggles) | Administrator |
 | `/settings` — View current configuration | Manage Server |
 | `/logs` — Configure log channels | Manage Server |
+| `/bypassrole` — Set role that bypasses all protections | Administrator |
 
 ### Protection
 | Command | Permission |
@@ -105,6 +111,10 @@ Watches audit logs for destructive action bursts (3+ within 10s):
 | `/antispam [...]` — thresholds, limits, invites, links | Manage Server |
 | `/blockuserapps <enabled>` | Manage Server |
 | `/botprotection <enabled>` | Manage Server |
+| `/security dangerous_invites` — block dangerous invites | Manage Server |
+| `/security safe_onboarding` — strict onboarding | Administrator |
+| `/security scan` — dangerous permission scanner | Administrator |
+| `/secure_everyone` — strip dangerous perms from @everyone | Administrator |
 
 ### Moderation
 | Command | Permission |
@@ -117,11 +127,12 @@ Watches audit logs for destructive action bursts (3+ within 10s):
 | `/purge <amount>` — max 100 | Manage Messages |
 | `/lock [channel]` / `/unlock [channel]` | Manage Channels |
 | `/panic <enabled>` — emergency lockdown | Administrator |
+| `/voicemute / voiceunmute / voicedisconnect / voicemove / voicelock` | Moderate Members |
 
 ### Security
 | Command | Permission |
 |---------|------------|
-| `/security-audit` — vulnerability scan & score | Manage Server |
+| `/health` — security score & threat level | Manage Server |
 | `/trust <user>` / `/untrust <user>` | Administrator |
 | `/trustbots <enabled>` | Administrator |
 
@@ -132,6 +143,30 @@ Watches audit logs for destructive action bursts (3+ within 10s):
 | `/afk [reason]` — set AFK | Everyone |
 | `/autorole <add/remove> <role>` | Manage Roles |
 | `/welcome <channel> <message> <enabled>` | Manage Guild |
+| `/leave <channel> <message> <enabled>` | Manage Guild |
+
+### Infrastructure
+| Command | Permission |
+|---------|------------|
+| `/new` — create a ticket | Everyone |
+| `/close` — close current ticket | Everyone |
+| `/giveaway <duration> <prize> [winners]` | Manage Guild |
+| `/giveaway_end <message_id>` | Manage Guild |
+| `/giveaway_reroll <message_id>` | Manage Guild |
+| `/voicemaster <channel> <category>` | Administrator |
+| `/reactionrole <message_id> <emoji> <role>` | Manage Roles |
+| `/buttonrole <role> <label> [emoji]` | Manage Roles |
+| `/dropdownrole <roles> [placeholder]` | Manage Roles |
+
+### Ownership
+| Command | Permission |
+|---------|------------|
+| `/owner add <user>` | Primary Owner |
+| `/owner remove <user>` | Primary Owner |
+| `/owner list` | Everyone |
+| `/owner transfer <user>` | Primary Owner |
+| `/rolefix scan` — check missing roles | Manage Roles |
+| `/rolefix template <name>` — apply role template | Manage Roles |
 
 ---
 
@@ -159,19 +194,7 @@ DISCORD_TOKEN=your_bot_token_here
 BOT_PREFIX=!
 OWNER_IDS=your_discord_user_id
 DATABASE_PATH=data/exeguard.db
-DASHBOARD_API_KEY=your_secret_api_key
 PORT=8080
-```
-
-### Dashboard Environment Variables
-The dashboard requires the following variables in its environment (e.g., on Vercel):
-```env
-NEXT_PUBLIC_DISCORD_CLIENT_ID=your_discord_client_id
-DISCORD_CLIENT_SECRET=your_discord_client_secret
-NEXTAUTH_SECRET=a_random_secret_string
-NEXTAUTH_URL=your_dashboard_url (e.g., https://exeguard.vercel.app)
-DISCORD_BOT_API_URL=your_bot_api_url (e.g., https://your-bot.render.com)
-DASHBOARD_API_KEY=your_secret_api_key (must match bot's DASHBOARD_API_KEY)
 ```
 
 ### Discord Setup
@@ -195,16 +218,19 @@ ExeGuard
 │   ├── antiraid.py      # Mass join detection & lockdown
 │   ├── antinuke.py      # Audit log monitoring & auto-ban
 │   ├── automod.py       # Webhook & @everyone protection
-│   ├── moderation.py    # Ban/kick/timeout/warn/purge/panic
+│   ├── moderation.py    # Ban/kick/timeout/warn/purge/panic/voice
 │   ├── verification.py  # Button & captcha verification
 │   ├── logging_cog.py   # Message/member/role/channel event logs
-│   ├── dashboard_api.py # REST API for web dashboard
+│   ├── analytics.py     # Server stats, growth, voice activity
+│   ├── infrastructure.py# Tickets, giveaways, VC, reaction/button/dropdown roles
+│   ├── server_mgmt.py   # Ownership, rolefix, security, bypass, community
 │   ├── games.py         # Game commands & blackjack engine
 │   ├── fun.py           # Social & entertainment commands
-│   └── utility.py       # AFK, autorole, welcome messages
+│   └── utility.py       # AFK, autorole, welcome messages, onboarding
 ├── games/               # Vendored discord_games library
 ├── utils/               # Embed builder, permission helpers
-└── dashboard/           # Next.js web dashboard (standalone)
+├── prodia/              # Prodia API constants
+└── data/                # Runtime assets (cards, pictures)
 ```
 
 ---
@@ -219,8 +245,6 @@ ExeGuard
 | **Framework** | [discord.py](https://github.com/Rapptz/discord.py) 2.3+ |
 | **Database** | aiosqlite (async SQLite) |
 | **API Server** | aiohttp |
-| **Dashboard** | Next.js + TypeScript + Tailwind |
-| **Auth** | Discord OAuth2 (next-auth) |
 | **Assets** | Pillow (card images, slot GIFs, 2048 render) |
 
 </div>

@@ -20,10 +20,6 @@ class BotConfig:
     database_path: str = field(
         default_factory=lambda: os.getenv("DATABASE_PATH", "data/exeguard.db")
     )
-    dashboard_api_key: str = field(
-        default_factory=lambda: os.getenv("DASHBOARD_API_KEY", "")
-    )
-
     def __post_init__(self) -> None:
         raw = os.getenv("OWNER_IDS", "")
         if raw:
@@ -62,11 +58,13 @@ NUKE_ACTION_INTERVAL = 10.0  # seconds
 VERIFICATION_TIMEOUT = 300  # seconds
 
 # ── Colors ──────────────────────────────────────────────────────────
-COLOR_PRIMARY = 0x6C5CE7  # Neon Purple
-COLOR_INFO = 0x00D4FF  # Cyber Blue
-COLOR_DANGER = 0xFF4D4D  # Warning Red
-COLOR_SUCCESS = 0x2ECC71  # Success Green
-COLOR_DARK = 0x0F1117  # Dark Background
+COLOR_PRIMARY = 0x0F1115  # Dark Charcoal
+COLOR_SECONDARY = 0x181B22  # Gray Panels
+COLOR_TEXT = 0xFFFFFF  # White Typography
+COLOR_MUTE = 0xA9ADB7  # Muted Gray
+COLOR_SUCCESS = 0x00D26A  # Security Green
+COLOR_DANGER = 0xFF3B3B  # Alert Red
+COLOR_INFO = 0xA9ADB7  # Using Mute for info
 
 # ── Embed footer ────────────────────────────────────────────────────
-EMBED_FOOTER = "ExeGuard | Futuristic Discord Protection"
+EMBED_FOOTER = "EXEGUARD v1.0 | Security • Moderation • Analytics • Infrastructure"

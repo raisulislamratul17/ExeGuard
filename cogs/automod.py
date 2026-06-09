@@ -37,6 +37,12 @@ class AutoMod(commands.Cog):
             return
 
         guild = channel.guild
+
+        # Check bypass role
+        bypass_role_id = settings.get("bypass_role")
+        def _has_bypass(m: discord.Member | None) -> bool:
+            return bool(bypass_role_id and m and any(r.id == bypass_role_id for r in m.roles))
+
         processed = []
         async for entry in guild.audit_logs(
             limit=5, action=discord.AuditLogAction.webhook_create
@@ -52,6 +58,9 @@ class AutoMod(commands.Cog):
             if guild.owner_id == entry.user.id:
                 continue
             if entry.user.bot and settings.get("trust_all_bots", 1):
+                continue
+            bypass_member = guild.get_member(entry.user.id)
+            if _has_bypass(bypass_member):
                 continue
             processed.append(entry.user.id)
 
@@ -70,6 +79,14 @@ class AutoMod(commands.Cog):
                 f"**Channel:** {channel.mention}\n"
                 f"Webhook has been deleted.",
             )
+            try:
+                await db.conn.execute(
+                    "INSERT INTO infractions (guild_id, user_id, rule, action) VALUES (?, ?, ?, ?)",
+                    (channel.guild.id, entry.user.id, "Unauthorized webhook created", "webhook deleted"),
+                )
+                await db.conn.commit()
+            except Exception:
+                pass
             log_ch_id = settings.get("log_channel")
             if log_ch_id:
                 log_ch = guild.get_channel(log_ch_id)
@@ -94,6 +111,11 @@ class AutoMod(commands.Cog):
         if not settings.get("antispam", True):
             return
 
+        # Bypass role check
+        bypass_role_id = settings.get("bypass_role")
+        if bypass_role_id and any(r.id == bypass_role_id for r in message.author.roles):
+            return
+
         if not message.mention_everyone:
             return
 
@@ -109,6 +131,15 @@ class AutoMod(commands.Cog):
                 reason="ExeGuard: @everyone/@here abuse",
             )
         except discord.HTTPException:
+            pass
+
+        try:
+            await db.conn.execute(
+                "INSERT INTO infractions (guild_id, user_id, rule, action) VALUES (?, ?, ?, ?)",
+                (message.guild.id, message.author.id, "@everyone/@here abuse", "timeout"),
+            )
+            await db.conn.commit()
+        except Exception:
             pass
 
         embed = EmbedBuilder.security(

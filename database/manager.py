@@ -106,6 +106,13 @@ class DatabaseManager:
             "bad_words": "TEXT DEFAULT ''",
             "block_user_apps": "INTEGER DEFAULT 1",
             "bot_protection": "INTEGER DEFAULT 1",
+            "block_nsfw": "INTEGER DEFAULT 1",
+            "block_dangerous_invites": "INTEGER DEFAULT 1",
+            "safe_onboarding": "INTEGER DEFAULT 1",
+            "leave_channel": "INTEGER",
+            "leave_message": "TEXT DEFAULT 'Goodbye {member.name}! We will miss you.'",
+            "leave_enabled": "INTEGER DEFAULT 0",
+            "bypass_role": "INTEGER",
         }
 
         for col_name, col_type in new_cols.items():
@@ -159,6 +166,160 @@ class DatabaseManager:
             """
         )
 
+        # Infrastructure: Tickets
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ticket_settings (
+                guild_id      INTEGER PRIMARY KEY,
+                category_id   INTEGER,
+                log_channel   INTEGER,
+                enabled       INTEGER DEFAULT 0
+            );
+            """
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tickets (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id     INTEGER NOT NULL,
+                user_id      INTEGER NOT NULL,
+                channel_id   INTEGER NOT NULL,
+                status       TEXT DEFAULT 'open',
+                timestamp    TEXT DEFAULT (datetime('now'))
+            );
+            """
+        )
+
+        # Infrastructure: Giveaways
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS giveaways (
+                message_id   INTEGER PRIMARY KEY,
+                guild_id     INTEGER NOT NULL,
+                channel_id   INTEGER NOT NULL,
+                prize        TEXT NOT NULL,
+                winners      INTEGER DEFAULT 1,
+                end_time     REAL NOT NULL,
+                status       TEXT DEFAULT 'active'
+            );
+            """
+        )
+
+        # Infrastructure: VoiceMaster
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS voicemaster_settings (
+                guild_id      INTEGER PRIMARY KEY,
+                channel_id    INTEGER,
+                category_id   INTEGER,
+                enabled       INTEGER DEFAULT 0
+            );
+            """
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS voicemaster_channels (
+                channel_id   INTEGER PRIMARY KEY,
+                owner_id     INTEGER NOT NULL,
+                guild_id     INTEGER NOT NULL
+            );
+            """
+        )
+
+        # Reaction Roles
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reaction_roles (
+                message_id   INTEGER NOT NULL,
+                emoji        TEXT NOT NULL,
+                role_id      INTEGER NOT NULL,
+                guild_id     INTEGER NOT NULL,
+                PRIMARY KEY (message_id, emoji)
+            );
+            """
+        )
+
+        # Growth tracking
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS growth_log (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id  INTEGER NOT NULL,
+                date      TEXT NOT NULL,
+                count     INTEGER NOT NULL
+            );
+            """
+        )
+
+        # Voice activity tracking
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS voice_activity (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id  INTEGER NOT NULL,
+                user_id   INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                join_time REAL NOT NULL,
+                leave_time REAL
+            );
+            """
+        )
+
+        # Button roles
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS button_roles (
+                guild_id   INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                role_id    INTEGER NOT NULL,
+                label      TEXT NOT NULL,
+                emoji      TEXT,
+                style      INTEGER DEFAULT 1,
+                PRIMARY KEY (message_id, role_id)
+            );
+            """
+        )
+
+        # Dropdown roles
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dropdown_roles (
+                guild_id   INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                role_id    INTEGER NOT NULL,
+                label      TEXT NOT NULL,
+                description TEXT,
+                emoji      TEXT,
+                PRIMARY KEY (message_id, role_id)
+            );
+            """
+        )
+
+        # Infractions tracking for AutoMod logs
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS infractions (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id  INTEGER NOT NULL,
+                user_id   INTEGER NOT NULL,
+                rule      TEXT NOT NULL,
+                action    TEXT NOT NULL,
+                timestamp TEXT DEFAULT (datetime('now'))
+            );
+            """
+        )
+
+        # Ownership System
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extra_owners (
+                guild_id     INTEGER NOT NULL,
+                user_id      INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            );
+            """
+        )
+
         await self.conn.commit()
 
     # ── Guild settings helpers ──────────────────────────────────────
@@ -194,6 +355,9 @@ class DatabaseManager:
         "spam_caps_ratio": 0.7, "spam_duplicate_threshold": 3,
         "spam_duplicate_interval": 10.0, "block_invites": 0, "block_links": 0,
         "bad_words": "", "block_user_apps": 1, "bot_protection": 1,
+        "block_nsfw": 1, "block_dangerous_invites": 1, "safe_onboarding": 1,
+        "leave_channel": None, "leave_message": "Goodbye {member.name}! We will miss you.",
+        "leave_enabled": 0, "bypass_role": None,
     }
 
     ALLOWED_COLUMNS = frozenset({
@@ -205,6 +369,9 @@ class DatabaseManager:
         "spam_duplicate_threshold", "spam_duplicate_interval",
         "block_invites", "block_links", "bad_words",
         "block_user_apps", "bot_protection",
+        "block_nsfw", "block_dangerous_invites", "safe_onboarding",
+        "leave_channel", "leave_message", "leave_enabled",
+        "bypass_role",
     })
 
     async def update_guild_setting(

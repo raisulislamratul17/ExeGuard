@@ -83,6 +83,17 @@ class AntiNuke(commands.Cog):
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         self._trackers.pop(guild.id, None)
 
+    async def _is_external_app(self, user: discord.User | discord.Member | None) -> bool:
+        """Check if an action was performed by an external bot/app (not a server member)."""
+        if user is None:
+            return False
+        if user.bot:
+            for guild in self.bot.guilds:
+                if guild.get_member(user.id):
+                    return False
+            return True
+        return False
+
     # ── Helpers ─────────────────────────────────────────────────────
 
     async def _is_trusted(self, guild: discord.Guild, user_id: int) -> bool:
@@ -91,10 +102,17 @@ class AntiNuke(commands.Cog):
         db = self.bot.db  # type: ignore[attr-defined]
         if await db.is_trusted_admin(guild.id, user_id):
             return True
-        
+
+        # Bypass role check
+        settings = await db.get_guild_settings(guild.id)
+        bypass_role_id = settings.get("bypass_role")
+        if bypass_role_id:
+            member = guild.get_member(user_id)
+            if member and any(r.id == bypass_role_id for r in member.roles):
+                return True
+
         member = guild.get_member(user_id)
         if member and member.bot:
-            settings = await db.get_guild_settings(guild.id)
             if settings.get("trust_all_bots", 1):
                 return True
         return False
@@ -225,6 +243,31 @@ class AntiNuke(commands.Cog):
             )
 
     @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member) -> None:
+        if not member.bot:
+            return
+        guild = member.guild
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.bot_add)
+        if user:
+            await self._handle_nuke_action(
+                guild, user, f"Added bot {member}"
+            )
+
+    @commands.Cog.listener()
+    async def on_app_command_completion(self, interaction: discord.Interaction, command: discord.app_commands.Command | discord.app_commands.ContextMenu) -> None:
+        # This is for tracking external application usage if possible
+        pass
+
+    @commands.Cog.listener()
+    async def on_guild_integrations_update(self, guild: discord.Guild) -> None:
+        """Detect external apps adding integrations (potential nuke vector)."""
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.integration_create)
+        if user and await self._is_external_app(user):
+            await self._handle_nuke_action(
+                guild, user, "External app created integration — potential nuke",
+            )
+
+    @commands.Cog.listener()
     async def on_guild_role_create(self, role: discord.Role) -> None:
         guild = role.guild
         user = await self._get_recent_auditor(guild, discord.AuditLogAction.role_create)
@@ -244,27 +287,54 @@ class AntiNuke(commands.Cog):
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
         guild = member.guild
+        # Check for kick
         user = await self._get_recent_auditor(guild, discord.AuditLogAction.kick)
         if user:
             await self._handle_nuke_action(
                 guild, user, f"Kicked {member}"
             )
-
-    @commands.Cog.listener()
-    async def on_member_join(self, member: discord.Member) -> None:
-        if not member.bot:
             return
-        guild = member.guild
-        user = await self._get_recent_auditor(guild, discord.AuditLogAction.bot_add)
+
+        # Check for prune
+        user = await self._get_recent_auditor(guild, discord.AuditLogAction.member_prune)
         if user:
             await self._handle_nuke_action(
-                guild, user, f"Added bot {member}"
+                guild, user, "Mass member prune"
             )
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        guild = after.guild
+        
+        # Check for nickname changes (Anti-Nickname Spam)
+        if before.nick != after.nick:
+            user = await self._get_recent_auditor(guild, discord.AuditLogAction.member_update)
+            if user:
+                await self._handle_nuke_action(
+                    guild, user, f"Updated nickname for {after}"
+                )
+
+        # Check for role changes (Anti-Member Update / Role Abuse)
+        if before.roles != after.roles:
+            user = await self._get_recent_auditor(guild, discord.AuditLogAction.member_role_update)
+            if user:
+                await self._handle_nuke_action(
+                    guild, user, f"Updated roles for {after}"
+                )
+
+        # Check for timeout changes (Anti-Timeout Abuse)
+        if before.timed_out_until != after.timed_out_until:
+            user = await self._get_recent_auditor(guild, discord.AuditLogAction.member_update)
+            if user:
+                await self._handle_nuke_action(
+                    guild, user, f"Updated timeout for {after}"
+                )
 
     @commands.Cog.listener()
     async def on_guild_update(self, before: discord.Guild, after: discord.Guild) -> None:
         user = await self._get_recent_auditor(after, discord.AuditLogAction.guild_update)
         if user:
+            # Check for dangerous updates like vanity URL changes, ownership transfer, etc.
             await self._handle_nuke_action(
                 after, user, "Updated server settings"
             )
@@ -279,6 +349,10 @@ class AntiNuke(commands.Cog):
             discord.Permissions(manage_guild=True),
             discord.Permissions(manage_roles=True),
             discord.Permissions(manage_channels=True),
+            discord.Permissions(kick_members=True),
+            discord.Permissions(moderate_members=True),
+            discord.Permissions(manage_webhooks=True),
+            discord.Permissions(manage_expressions=True),
         )
         gained = after.permissions.value & ~before.permissions.value
         if not any(gained & p.value for p in dangerous):
@@ -289,7 +363,7 @@ class AntiNuke(commands.Cog):
             await self._handle_nuke_action(
                 guild,
                 user,
-                f"Escalated permissions on @{after.name}",
+                f"Escalated dangerous permissions on @{after.name}",
             )
 
     @commands.Cog.listener()

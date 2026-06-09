@@ -32,6 +32,13 @@ URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 INVITE_RE = re.compile(
     r"(?:discord\.gg/|discord(?:app)?\.com/invite/)[\w-]+", re.IGNORECASE
 )
+TOKEN_RE = re.compile(r"[a-zA-Z0-9_-]{24,28}\.[a-zA-Z0-9_-]{6}\.[a-zA-Z0-9_-]{27,38}")
+SCAM_RE = re.compile(r"(?:free|gift|nitro|steam|promo|claim|airdrop).*(?:nitro|gift|card|balance|discord|steam)", re.IGNORECASE)
+PHISHING_RE = re.compile(r"discorcl|dlscord|discord-app|discord\.gift|steamcommunnity|steanncommunity", re.IGNORECASE)
+NSFW_RE = re.compile(
+    r"(?:nsfw|porn|xxx|hentai|rule34|onlyfans|fansly|nude|sex|camgirl|adultcontent|18\+)",
+    re.IGNORECASE
+)
 
 
 @dataclass
@@ -41,6 +48,7 @@ class UserSpamData:
     messages: list[float] = field(default_factory=list)
     contents: list[tuple[str, float]] = field(default_factory=list)
     infractions: int = 0
+    ghost_pings: list[tuple[int, float]] = field(default_factory=list) # (message_id, timestamp)
 
 
 class AntiSpam(commands.Cog):
@@ -110,6 +118,12 @@ class AntiSpam(commands.Cog):
         db = self.bot.db  # type: ignore[attr-defined]
         settings = await db.get_guild_settings(message.guild.id)
 
+        # Bypass role check — members with this role bypass ALL protections
+        bypass_role_id = settings.get("bypass_role")
+        if bypass_role_id and isinstance(message.author, discord.Member):
+            if any(r.id == bypass_role_id for r in message.author.roles):
+                return True
+
         # If the author is a bot, check if all bots are trusted
         if message.author.bot:
             if settings.get("trust_all_bots", 1):
@@ -150,6 +164,16 @@ class AntiSpam(commands.Cog):
         db = self.bot.db  # type: ignore[attr-defined]
         settings = await db.get_guild_settings(message.guild.id)
         timeout_secs = settings.get("timeout_duration", SPAM_TIMEOUT_DURATION)
+
+        # Log infraction
+        try:
+            await db.conn.execute(
+                "INSERT INTO infractions (guild_id, user_id, rule, action) VALUES (?, ?, ?, ?)",
+                (message.guild.id, message.author.id, reason, "warn/timeout/ban"),
+            )
+            await db.conn.commit()
+        except Exception:
+            pass
 
         if data.infractions >= 5:
             try:
@@ -345,6 +369,36 @@ class AntiSpam(commands.Cog):
                     pass
 
     @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message) -> None:
+        if not message.guild or message.author.bot:
+            return
+        
+        data = self._guild_data(message.guild.id, message.author.id)
+        now = time.time()
+        
+        # Check if this message was a potential ghost ping
+        for msg_id, ts in list(data.ghost_pings):
+            if msg_id == message.id:
+                if now - ts < 60: # Within 1 minute
+                    embed = EmbedBuilder.security(
+                        "Ghost Ping Detected",
+                        f"**User:** {message.author.mention}\n"
+                        f"**Channel:** {message.channel.mention}\n"
+                        f"**Action:** Warning sent to logs.",
+                    )
+                    
+                    db = self.bot.db # type: ignore
+                    settings = await db.get_guild_settings(message.guild.id)
+                    log_channel_id = settings.get("log_channel")
+                    if log_channel_id:
+                        channel = message.guild.get_channel(log_channel_id)
+                        if isinstance(channel, discord.TextChannel):
+                            await channel.send(embed=embed)
+                
+                data.ghost_pings.remove((msg_id, ts))
+                break
+
+    @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if not message.guild:
             return
@@ -377,6 +431,8 @@ class AntiSpam(commands.Cog):
         caps_ratio = settings.get("spam_caps_ratio") or 0.7
         block_invites = settings.get("block_invites") or 0
         block_links = settings.get("block_links") or 0
+        block_nsfw = settings.get("block_nsfw") or 1
+        block_dangerous_invites = settings.get("block_dangerous_invites") or 1
         bad_words = settings.get("bad_words") or ""
 
         # 1. Bad Words Filter
@@ -384,9 +440,12 @@ class AntiSpam(commands.Cog):
             await self._punish(message, "Using blacklisted words")
             return
 
-        # 2. Invite Link Blocker
+        # 2. Invite / Dangerous Invite Blocker
         if block_invites and INVITE_RE.search(content):
             await self._punish(message, "Sending Discord invite links")
+            return
+        if block_dangerous_invites and not block_invites and INVITE_RE.search(content):
+            await self._punish(message, "Sending dangerous/unauthorized invite links")
             return
 
         # 3. External Link Blocker
@@ -394,7 +453,25 @@ class AntiSpam(commands.Cog):
             await self._punish(message, "Sending external links")
             return
 
-        # 4. Standard Anti-Spam checks
+        # 4. Token Spam / Scam / Phishing / NSFW Detection
+        if TOKEN_RE.search(content):
+            await self._punish(message, "Token leakage / spam detected")
+            return
+        if SCAM_RE.search(content):
+            await self._punish(message, "Scam / malicious link detected")
+            return
+        if PHISHING_RE.search(content):
+            await self._punish(message, "Phishing attempt detected")
+            return
+        if block_nsfw and NSFW_RE.search(content):
+            await self._punish(message, "NSFW content detected")
+            return
+
+        # 5. Ghost Ping tracking
+        if message.mentions or message.role_mentions or message.mention_everyone:
+            data.ghost_pings.append((message.id, now))
+
+        # 6. Standard Anti-Spam checks
         if self._check_rapid(data, now, spam_threshold, spam_interval):
             await self._punish(message, "Rapid messaging")
         elif self._check_duplicate(data, content, now, dup_threshold, dup_interval):

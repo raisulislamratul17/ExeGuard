@@ -20,6 +20,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from utils.embed_builder import EmbedBuilder
+from config import COLOR_PRIMARY, COLOR_SUCCESS, COLOR_DANGER
 
 
 def parse_duration(duration_str: str) -> int | None:
@@ -50,10 +51,53 @@ class Moderation(commands.Cog):
         self.bot = bot
         self._tempban_lock = asyncio.Lock()
         self._panic_locked: dict[int, set[int]] = {}
+        self._snipes: dict[int, discord.Message] = {}
+        self._edit_snipes: dict[int, tuple[discord.Message, discord.Message]] = {}
         self.check_tempbans.start()
 
     def cog_unload(self) -> None:
         self.check_tempbans.cancel()
+
+    # ── Snipe Listeners ─────────────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+        self._snipes[message.channel.id] = message
+
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        if before.author.bot:
+            return
+        self._edit_snipes[before.channel.id] = (before, after)
+
+    @app_commands.command(name="snipe", description="View the last deleted message in this channel")
+    @app_commands.checks.has_permissions(manage_messages=True)
+    async def snipe_cmd(self, interaction: discord.Interaction) -> None:
+        message = self._snipes.get(interaction.channel_id)
+        if not message:
+            await interaction.response.send_message("There is nothing to snipe!", ephemeral=True)
+            return
+        
+        embed = discord.Embed(description=message.content, color=COLOR_PRIMARY, timestamp=message.created_at)
+        embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="editsnipe", description="View the last edited message in this channel")
+    @app_commands.checks.has_permissions(manage_messages=True)
+    async def editsnipe_cmd(self, interaction: discord.Interaction) -> None:
+        data = self._edit_snipes.get(interaction.channel_id)
+        if not data:
+            await interaction.response.send_message("There is nothing to edit-snipe!", ephemeral=True)
+            return
+        
+        before, after = data
+        embed = discord.Embed(color=COLOR_PRIMARY, timestamp=after.edited_at or datetime.now(timezone.utc))
+        embed.set_author(name=before.author.display_name, icon_url=before.author.display_avatar.url)
+        embed.add_field(name="Before", value=before.content or "*(No content)*", inline=False)
+        embed.add_field(name="After", value=after.content or "*(No content)*", inline=False)
+        await interaction.response.send_message(embed=embed)
 
     # ── Tempbans Background Worker ──────────────────────────────────
 
@@ -99,10 +143,10 @@ class Moderation(commands.Cog):
                     )
                 if rows:
                     await db.conn.commit()
-            except Exception:
-                log.exception("Tempban check loop failed")
-            finally:
-                pass
+        except Exception:
+            log.exception("Tempban check loop failed")
+        finally:
+            pass
 
     @check_tempbans.before_loop
     async def before_check_tempbans(self) -> None:
@@ -605,16 +649,162 @@ class Moderation(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             await self._log_action(interaction.guild, embed)
 
-    @commands.Cog.listener()
-    async def on_guild_remove(self, guild: discord.Guild) -> None:
-        self._panic_locked.pop(guild.id, None)
+    @app_commands.command(name="unban", description="Unban a user from the server")
+    @app_commands.describe(user_id="ID of the user to unban", reason="Reason for the unban")
+    @app_commands.checks.has_permissions(ban_members=True)
+    @app_commands.checks.cooldown(1, 5)
+    async def unban_cmd(
+        self,
+        interaction: discord.Interaction,
+        user_id: str,
+        reason: str = "No reason provided",
+    ) -> None:
+        assert interaction.guild is not None
+        try:
+            user = await self.bot.fetch_user(int(user_id))
+            await interaction.guild.unban(user, reason=f"{interaction.user}: {reason}")
+            embed = EmbedBuilder.success(
+                "User Unbanned",
+                f"**User:** {user.mention} (`{user.id}`)\n"
+                f"**Moderator:** {interaction.user.mention}\n"
+                f"**Reason:** {reason}",
+            )
+            await interaction.response.send_message(embed=embed)
+            await self._log_action(interaction.guild, embed)
+        except (ValueError, discord.NotFound):
+            await interaction.response.send_message("Invalid user ID or user not banned.", ephemeral=True)
 
-    # ── Security Audit Command ──────────────────────────────────────
+    @app_commands.command(name="softban", description="Ban and immediately unban a user to clear messages")
+    @app_commands.describe(user="User to softban", reason="Reason for the softban")
+    @app_commands.checks.has_permissions(ban_members=True)
+    @app_commands.checks.cooldown(1, 5)
+    async def softban_cmd(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        reason: str = "No reason provided",
+    ) -> None:
+        assert interaction.guild is not None
+        if await self._protect_owner(interaction, user.id):
+            return
+        await interaction.guild.ban(user, reason=f"Softban by {interaction.user}: {reason}", delete_message_days=7)
+        await interaction.guild.unban(user, reason="Softban cleanup")
+        
+        embed = EmbedBuilder.security(
+            "User Softbanned",
+            f"**User:** {user.mention} (`{user.id}`)\n"
+            f"**Moderator:** {interaction.user.mention}\n"
+            f"**Action:** Banned and unbanned (messages cleared)\n"
+            f"**Reason:** {reason}",
+        )
+        await interaction.response.send_message(embed=embed)
+        await self._log_action(interaction.guild, embed)
 
-    @app_commands.command(name="security-audit", description="Analyze the guild's security status")
+    @app_commands.command(name="nickname", description="Change a member's nickname")
+    @app_commands.describe(member="Member to change nickname", nickname="New nickname (leave empty to reset)")
+    @app_commands.checks.has_permissions(manage_nicknames=True)
+    async def nickname_cmd(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        nickname: str | None = None,
+    ) -> None:
+        old_nick = member.display_name
+        await member.edit(nick=nickname, reason=f"Changed by {interaction.user}")
+        embed = EmbedBuilder.info(
+            "Nickname Updated",
+            f"**Member:** {member.mention}\n"
+            f"**Old:** {old_nick}\n"
+            f"**New:** {nickname or member.name}",
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="userinfo", description="Get detailed information about a user")
+    @app_commands.describe(user="User to get info for")
+    async def userinfo_cmd(
+        self, interaction: discord.Interaction, user: discord.Member | discord.User | None = None
+    ) -> None:
+        user = user or interaction.user
+        member = user if isinstance(user, discord.Member) else None
+        
+        embed = discord.Embed(title=f"User Info - {user.name}", color=COLOR_PRIMARY)
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.add_field(name="ID", value=user.id, inline=True)
+        embed.add_field(name="Bot?", value="Yes" if user.bot else "No", inline=True)
+        embed.add_field(name="Created At", value=discord.utils.format_dt(user.created_at, 'R'), inline=True)
+        
+        if member:
+            embed.add_field(name="Joined At", value=discord.utils.format_dt(member.joined_at, 'R') if member.joined_at else "Unknown", inline=True)
+            roles = [r.mention for r in reversed(member.roles) if not r.is_default()]
+            embed.add_field(name=f"Roles ({len(roles)})", value=" ".join(roles[:10]) + ("..." if len(roles) > 10 else "") or "None", inline=False)
+            
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="avatar", description="Get a user's avatar")
+    @app_commands.describe(user="User to get avatar for")
+    async def avatar_cmd(self, interaction: discord.Interaction, user: discord.User | None = None) -> None:
+        user = user or interaction.user
+        embed = discord.Embed(title=f"Avatar - {user.name}", color=COLOR_PRIMARY)
+        embed.set_image(url=user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="banner", description="Get a user's banner")
+    @app_commands.describe(user="User to get banner for")
+    async def banner_cmd(self, interaction: discord.Interaction, user: discord.User | None = None) -> None:
+        user = user or interaction.user
+        user = await self.bot.fetch_user(user.id)
+        if not user.banner:
+            await interaction.response.send_message("This user has no banner.", ephemeral=True)
+            return
+        embed = discord.Embed(title=f"Banner - {user.name}", color=COLOR_PRIMARY)
+        embed.set_image(url=user.banner.url)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="infractions", description="View AutoMod infractions for a user")
+    @app_commands.describe(user="User to check infractions for")
+    @app_commands.checks.has_permissions(manage_messages=True)
+    async def infractions_cmd(self, interaction: discord.Interaction, user: discord.User) -> None:
+        assert interaction.guild is not None
+        db = self.bot.db # type: ignore
+        async with db.conn.execute(
+            "SELECT rule, action, timestamp FROM infractions WHERE guild_id = ? AND user_id = ? ORDER BY timestamp DESC LIMIT 15",
+            (interaction.guild.id, user.id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        if not rows:
+            await interaction.response.send_message(f"No infractions for {user.mention}.", ephemeral=True)
+            return
+        lines = [f"**{r['rule']}** → {r['action']} ({r['timestamp']})" for r in rows]
+        embed = EmbedBuilder.warning(f"AutoMod Infractions — {user.name} ({len(rows)})", "\n".join(lines))
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="history", description="View moderation history for a user")
+    @app_commands.describe(user="User to check history for")
+    @app_commands.checks.has_permissions(manage_messages=True)
+    async def history_cmd(self, interaction: discord.Interaction, user: discord.User) -> None:
+        assert interaction.guild is not None
+        db = self.bot.db # type: ignore
+        async with db.conn.execute(
+            "SELECT * FROM mod_actions WHERE guild_id = ? AND user_id = ? ORDER BY timestamp DESC LIMIT 10",
+            (interaction.guild.id, user.id)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        
+        if not rows:
+            await interaction.response.send_message(f"No history found for {user.mention}.", ephemeral=True)
+            return
+            
+        lines = []
+        for r in rows:
+            lines.append(f"**{r['action'].upper()}** - <@{r['mod_id']}>: {r['reason']} ({r['timestamp']})")
+            
+        embed = EmbedBuilder.info(f"Mod History - {user.name}", "\n".join(lines))
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="health", description="Analyze the guild's security status")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.checks.cooldown(1, 30)
-    async def security_audit_cmd(self, interaction: discord.Interaction) -> None:
+    async def health_cmd(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         db = self.bot.db  # type: ignore[attr-defined]
         
@@ -623,110 +813,43 @@ class Moderation(commands.Cog):
         
         score = 0
         vulnerabilities = []
-        recommendations = []
 
         # Audit toggles
-        if s.get("antispam"):
-            score += 20
-        else:
-            vulnerabilities.append("🔴 Anti-Spam protection is disabled.")
-            recommendations.append("Use `/antispam enabled:True` to shield against spammers.")
+        if s.get("antispam"): score += 20
+        else: vulnerabilities.append("🔴 Anti-Spam disabled")
 
-        if s.get("antiraid"):
-            score += 20
-        else:
-            vulnerabilities.append("🔴 Anti-Raid protection is disabled.")
-            recommendations.append("Use `/antiraid level:medium` to prevent bot storms.")
+        if s.get("antinuke"): score += 20
+        else: vulnerabilities.append("🔴 Anti-Nuke disabled")
 
-        if s.get("antinuke"):
-            score += 20
-        else:
-            vulnerabilities.append("🔴 Anti-Nuke auditing is disabled.")
-            recommendations.append("Use `/antinuke enabled:True` to block rogue staff members.")
+        if s.get("verification"): score += 20
+        else: vulnerabilities.append("🟡 Verification disabled")
 
-        if s.get("verification"):
-            score += 15
-        else:
-            vulnerabilities.append("🟡 Server Verification is disabled.")
-            recommendations.append("Run `/verify method:captcha` to gate new members.")
+        if s.get("log_channel"): score += 20
+        else: vulnerabilities.append("🟡 Logging not configured")
 
-        # Log configuration
-        if s.get("log_channel") and s.get("mod_log_channel"):
-            score += 10
-        else:
-            vulnerabilities.append("🟡 Logging channels are not fully set up.")
-            recommendations.append("Configure security logs with `/setup` wizard.")
+        if s.get("antiraid"): score += 20
+        else: vulnerabilities.append("🟡 Anti-Raid disabled")
 
-        # Admin Roles Audit
-        admin_roles = []
-        for r in interaction.guild.roles:
-            if r.permissions.administrator and not r.is_default():
-                admin_roles.append(r)
-
-        role_count = len(admin_roles)
-        if role_count <= 3:
-            score += 15
-        else:
-            deduction = min((role_count - 3) * 5, 15)
-            score += (15 - deduction)
-            vulnerabilities.append(f"🟡 Massive Administrator Roles count ({role_count} roles).")
-            recommendations.append("Review roles with administrative permissions to restrict scope.")
-
-        # Check if @everyone has administrative permissions
-        if interaction.guild.default_role.permissions.administrator:
-            score = max(score - 30, 0)
-            vulnerabilities.append("🚨 CRITICAL: The `@everyone` role has Administrator permissions!")
-            recommendations.append("IMMEDIATELY remove administrative permissions from the `@everyone` role.")
-
-        # Check if @everyone can use external apps
-        if interaction.guild.default_role.permissions.use_external_apps:
-            score = max(score - 15, 0)
-            vulnerabilities.append("🚨 CRITICAL: The `@everyone` role is allowed to **Use External Apps**!")
-            recommendations.append("Disable the 'Use External Apps' permission for `@everyone` in Server Settings -> Roles to block malicious spam apps entirely.")
-
-        # Check channel safety
-        unsafe_channels = 0
-        for ch in interaction.guild.text_channels:
-            perms = ch.permissions_for(interaction.guild.default_role)
-            if perms.send_messages and (perms.manage_messages or perms.manage_channels):
-                unsafe_channels += 1
-
-        if unsafe_channels > 0:
-            score = max(score - 10, 0)
-            vulnerabilities.append(f"🟡 Unsafe default permissions in {unsafe_channels} channels.")
-            recommendations.append("Ensure @everyone does not have permission to manage messages or channels.")
-
-        # Color and Indicator bar
-        if score >= 80:
-            bar_color = "🟩"
-            embed_color = 0x2ECC71  # Success Green
-        elif score >= 50:
-            bar_color = "🟨"
-            embed_color = 0xF1C40F  # Orange/Yellow
-        else:
-            bar_color = "🟥"
-            embed_color = 0xE74C3C  # Danger Red
-
-        filled_bars = int(score / 10)
-        indicator_bar = (bar_color * filled_bars) + ("⬜" * (10 - filled_bars))
-
-        vuln_text = "\n".join(vulnerabilities) if vulnerabilities else "✅ No significant security flaws found."
-        recom_text = "\n".join(recommendations) if recommendations else "✅ Server setup matches recommended best practices."
+        # Threat Level
+        if score >= 90: threat = "LOW"
+        elif score >= 70: threat = "MEDIUM"
+        elif score >= 40: threat = "HIGH"
+        else: threat = "CRITICAL"
 
         embed = discord.Embed(
-            title=f"🛡️ ExeGuard Security Audit — {interaction.guild.name}",
-            color=embed_color,
+            title=f"Security Health - {interaction.guild.name}",
+            color=COLOR_SUCCESS if score > 70 else (COLOR_DANGER if score < 40 else 0xF1C40F),
             timestamp=datetime.now(timezone.utc)
         )
-        embed.add_field(
-            name="Overall Security Score",
-            value=f"**{score}/100**\n`{indicator_bar}`",
-            inline=False
-        )
-        embed.add_field(name="Identified Vulnerabilities", value=vuln_text, inline=False)
-        embed.add_field(name="Recommended Fixes", value=recom_text, inline=False)
-        embed.set_footer(text="ExeGuard Security Systems")
+        embed.add_field(name="Security Score", value=f"**{score}/100**", inline=True)
+        embed.add_field(name="Threat Level", value=f"**{threat}**", inline=True)
+        
+        if vulnerabilities:
+            embed.add_field(name="Issues Found", value="\n".join(vulnerabilities), inline=False)
+        else:
+            embed.add_field(name="Status", value="✅ All systems operational", inline=False)
 
+        embed.set_footer(text=EMBED_FOOTER)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(
@@ -748,6 +871,151 @@ class Moderation(commands.Cog):
             f"Staff will be blocked from banning/kicking bots added to the server.",
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── Voice Moderation ───────────────────────────────────────────
+
+    @app_commands.command(name="voicemute", description="Mute a member in voice channels")
+    @app_commands.describe(member="Member to mute", reason="Reason for the mute")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.cooldown(1, 5)
+    async def voicemute_cmd(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        reason: str = "No reason provided",
+    ) -> None:
+        if not member.voice or not member.voice.channel:
+            await interaction.response.send_message(f"{member.mention} is not in a voice channel.", ephemeral=True)
+            return
+        await member.edit(mute=True, reason=f"{interaction.user}: {reason}")
+        embed = EmbedBuilder.security(
+            "Member Voice Muted",
+            f"**Member:** {member.mention}\n"
+            f"**Moderator:** {interaction.user.mention}\n"
+            f"**Reason:** {reason}",
+        )
+        await interaction.response.send_message(embed=embed)
+        await self._log_action(interaction.guild, embed)
+
+    @app_commands.command(name="voiceunmute", description="Unmute a member in voice channels")
+    @app_commands.describe(member="Member to unmute")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.cooldown(1, 5)
+    async def voiceunmute_cmd(
+        self, interaction: discord.Interaction, member: discord.Member
+    ) -> None:
+        await member.edit(mute=False, reason=f"Unmuted by {interaction.user}")
+        embed = EmbedBuilder.success(
+            "Member Voice Unmuted",
+            f"**Member:** {member.mention}\n"
+            f"**Moderator:** {interaction.user.mention}",
+        )
+        await interaction.response.send_message(embed=embed)
+        await self._log_action(interaction.guild, embed)
+
+    @app_commands.command(name="voicedisconnect", description="Disconnect a member from voice")
+    @app_commands.describe(member="Member to disconnect", reason="Reason for disconnect")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.cooldown(1, 5)
+    async def voicedisconnect_cmd(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        reason: str = "No reason provided",
+    ) -> None:
+        if not member.voice or not member.voice.channel:
+            await interaction.response.send_message(f"{member.mention} is not in a voice channel.", ephemeral=True)
+            return
+        await member.move_to(None, reason=f"{interaction.user}: {reason}")
+        embed = EmbedBuilder.security(
+            "Member Disconnected",
+            f"**Member:** {member.mention}\n"
+            f"**Moderator:** {interaction.user.mention}\n"
+            f"**Reason:** {reason}",
+        )
+        await interaction.response.send_message(embed=embed)
+        await self._log_action(interaction.guild, embed)
+
+    @app_commands.command(name="voicemove", description="Move a member to another voice channel")
+    @app_commands.describe(member="Member to move", channel="Target voice channel")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.cooldown(1, 5)
+    async def voicemove_cmd(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        channel: discord.VoiceChannel,
+    ) -> None:
+        if not member.voice or not member.voice.channel:
+            await interaction.response.send_message(f"{member.mention} is not in a voice channel.", ephemeral=True)
+            return
+        await member.move_to(channel, reason=f"Moved by {interaction.user}")
+        embed = EmbedBuilder.info(
+            "Member Moved",
+            f"**Member:** {member.mention}\n"
+            f"**Channel:** {channel.mention}\n"
+            f"**Moderator:** {interaction.user.mention}",
+        )
+        await interaction.response.send_message(embed=embed)
+        await self._log_action(interaction.guild, embed)
+
+    @app_commands.command(name="voicelock", description="Lock a voice channel (disallow connect)")
+    @app_commands.describe(channel="Voice channel to lock (defaults to your current)")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    @app_commands.checks.cooldown(1, 5)
+    async def voicelock_cmd(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.VoiceChannel | None = None,
+    ) -> None:
+        target = channel
+        if not target:
+            if isinstance(interaction.user, discord.Member) and interaction.user.voice:
+                target = interaction.user.voice.channel
+            if not target:
+                await interaction.response.send_message("Specify a channel or join one first.", ephemeral=True)
+                return
+        overwrite = target.overwrites_for(target.guild.default_role)
+        overwrite.connect = False
+        await target.set_permissions(
+            target.guild.default_role,
+            overwrite=overwrite,
+            reason=f"Voice channel locked by {interaction.user}",
+        )
+        embed = EmbedBuilder.security(
+            "Voice Channel Locked",
+            f"{target.mention} has been locked.",
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="voiceunlock", description="Unlock a voice channel")
+    @app_commands.describe(channel="Voice channel to unlock")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    @app_commands.checks.cooldown(1, 5)
+    async def voiceunlock_cmd(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.VoiceChannel | None = None,
+    ) -> None:
+        target = channel
+        if not target:
+            if isinstance(interaction.user, discord.Member) and interaction.user.voice:
+                target = interaction.user.voice.channel
+            if not target:
+                await interaction.response.send_message("Specify a channel or join one first.", ephemeral=True)
+                return
+        overwrite = target.overwrites_for(target.guild.default_role)
+        overwrite.connect = None
+        await target.set_permissions(
+            target.guild.default_role,
+            overwrite=overwrite,
+            reason=f"Voice channel unlocked by {interaction.user}",
+        )
+        embed = EmbedBuilder.success(
+            "Voice Channel Unlocked",
+            f"{target.mention} has been unlocked.",
+        )
+        await interaction.response.send_message(embed=embed)
 
     # ── Configuration Settings ──────────────────────────────────────
 
