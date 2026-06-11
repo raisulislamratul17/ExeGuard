@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 
+from aiohttp import web
 import discord
 from discord.ext import commands
 
@@ -152,6 +153,23 @@ def _setup_logging() -> None:
     logging.getLogger("discord.http").setLevel(logging.WARNING)
 
 
+async def _run_health_server() -> tuple[web.AppRunner, web.TCPSite]:
+    """Minimal HTTP server for Render health checks."""
+    app = web.Application()
+
+    async def health(_request: web.Request) -> web.Response:
+        return web.Response(text="OK")
+
+    app.router.add_get("/", health)
+    port = int(os.getenv("PORT", "8080"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    log.info("Health server listening on 0.0.0.0:%d", port)
+    return runner, site
+
+
 async def main() -> None:
     _setup_logging()
     cfg = BotConfig()
@@ -160,8 +178,13 @@ async def main() -> None:
         sys.exit(1)
 
     bot = ExeGuard(cfg)
-    async with bot:
-        await bot.start(cfg.token)
+    runner, site = await _run_health_server()
+    try:
+        async with bot:
+            await bot.start(cfg.token)
+    finally:
+        await site.stop()
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
